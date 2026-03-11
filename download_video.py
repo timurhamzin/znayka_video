@@ -19,16 +19,23 @@ logger = logging.getLogger(__name__)
 
 
 def download_playlist(url: str, resolution: str) -> None:
-    """Download YouTube playlist using yt-dlp."""
 
     save_path = BASE_DIR / 'downloads'
     save_path.mkdir(exist_ok=True)
 
+    height = resolution.replace('p', '')
+
     ydl_opts = {
-        'format': f'bestvideo[height<={resolution[:-1]}]+bestaudio/best[height<={resolution[:-1]}]',
+        'format': f'bestvideo[height<={height}]+bestaudio/best[height<={height}]',
         'outtmpl': str(save_path / '%(playlist)s/%(title)s.%(ext)s'),
         'merge_output_format': 'mp4',
-        'noplaylist': False,
+        'ignoreerrors': True,
+        'js_runtimes': {
+            'node': {
+                'path': r'C:\Program Files\nodejs\node.exe'
+            }
+        },
+        'remote_components': 'ejs:github',
     }
 
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
