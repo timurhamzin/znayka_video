@@ -28,7 +28,8 @@ from dotenv import load_dotenv
 from g2p_en import G2p
 from transformers import MarianMTModel, MarianTokenizer
 
-# Configure logging
+load_dotenv()
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -36,561 +37,477 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-for pkg in [
-    "averaged_perceptron_tagger_eng",
-    "cmudict",
-    "punkt",
-]:
+for pkg in ["averaged_perceptron_tagger_eng", "cmudict", "punkt"]:
     try:
         nltk.data.find(pkg)
     except LookupError:
         nltk.download(pkg)
 
-load_dotenv()
 
-VIDEO_FOLDER = Path(os.getenv("VIDEO_FOLDER", ""))
-DUPLICATE_SRT_ENCODING = os.getenv("DUPLICATE_SRT_ENCODING", "utf-8")
-LANGUAGE = os.getenv("LANGUAGE", "en")
-HF_TOKEN = os.getenv("HF_TOKEN", None)
-OUTPUT_FOLDER = os.getenv("OUTPUT_FOLDER", None)
-if OUTPUT_FOLDER:
-    OUTPUT_FOLDER = Path(OUTPUT_FOLDER)
+class TranslationModel:
+    """Responsible for translation using MarianMT model."""
 
-VOWELS = {
-    "AA",
-    "AE",
-    "AH",
-    "AO",
-    "AW",
-    "AY",
-    "EH",
-    "ER",
-    "EY",
-    "IH",
-    "IY",
-    "OW",
-    "OY",
-    "UH",
-    "UW",
-}
-
-PHONEME_MAP_EN = {
-    "AA": "A",
-    "AE": "A",
-    "AH": "U",
-    "AO": "AW",
-    "AW": "OW",
-    "AY": "AY",
-    "EH": "E",
-    "ER": "ER",
-    "EY": "AY",
-    "IH": "I",
-    "IY": "EE",
-    "OW": "OH",
-    "OY": "OY",
-    "UH": "U",
-    "UW": "OO",
-    "B": "B",
-    "CH": "CH",
-    "D": "D",
-    "DH": "TH",
-    "F": "F",
-    "G": "G",
-    "HH": "H",
-    "JH": "J",
-    "K": "K",
-    "L": "L",
-    "M": "M",
-    "N": "N",
-    "NG": "NG",
-    "P": "P",
-    "R": "R",
-    "S": "S",
-    "SH": "SH",
-    "T": "T",
-    "TH": "TH",
-    "V": "V",
-    "W": "W",
-    "Y": "Y",
-    "Z": "Z",
-    "ZH": "ZH",
-}
-
-g2p = G2p()
-
-
-def respell_english(text: str) -> str:
-    phonemes = g2p(text)
-
-    words = []
-    current = []
-
-    for p in phonemes:
-        if p == " ":
-            if current:
-                words.append(_respell_word(current))
-                current = []
-            continue
-
-        current.append(p)
-
-    if current:
-        words.append(_respell_word(current))
-
-    return " ".join(words)
-
-
-def _respell_word(phonemes: list[str]) -> str:
-    syllables = []
-    current = []
-
-    for p in phonemes:
-        base = re.sub(r"\d", "", p)
-
-        if base in VOWELS and current:
-            syllables.append(current)
-            current = []
-
-        current.append(p)
-
-    if current:
-        syllables.append(current)
-
-    rendered = []
-
-    for syll in syllables:
-        stress = any(p.endswith("1") for p in syll)
-
-        parts = []
-
-        for p in syll:
-            base = re.sub(r"\d", "", p)
-            letters = PHONEME_MAP_EN.get(base, base)
-
-            if stress:
-                letters = letters.upper()
-            else:
-                letters = letters.lower()
-
-            parts.append(letters)
-
-        rendered.append("".join(parts))
-
-    return "-".join(rendered)
-
-
-def load_model(model_name: str, hf_token: str | None = None):
-    tokenizer = MarianTokenizer.from_pretrained(
-        model_name,
-        local_files_only=True,
-    )
-    model = MarianMTModel.from_pretrained(
-        model_name,
-        local_files_only=True,
-    )
-    model.eval()
-    return tokenizer, model
-
-
-def translate_batch(texts: list[str], tokenizer, model) -> list[str]:
-    inputs = tokenizer(
-        texts,
-        return_tensors="pt",
-        padding=True,
-        truncation=True,
-        max_length=512,
-    )
-
-    # Ensure pad_token_id is set correctly
-    if tokenizer.pad_token_id is None:
-        tokenizer.pad_token_id = tokenizer.eos_token_id
-
-    with torch.no_grad():
-        outputs = model.generate(
-            inputs["input_ids"],
-            attention_mask=inputs["attention_mask"],
-            max_length=512,
-            num_beams=4,
-            early_stopping=True,
+    def __init__(self, model_name: str, hf_token: str | None = None):
+        self.tokenizer = MarianTokenizer.from_pretrained(
+            model_name,
+            local_files_only=True,
+            use_auth_token=hf_token,
         )
 
-    return tokenizer.batch_decode(outputs, skip_special_tokens=True)
+        self.model = MarianMTModel.from_pretrained(
+            model_name,
+            local_files_only=True,
+            use_auth_token=hf_token,
+        )
+
+        self.model.eval()
+
+        if self.tokenizer.pad_token_id is None:
+            self.tokenizer.pad_token_id = self.tokenizer.eos_token_id
+
+    def translate(self, texts: list[str]) -> list[str]:
+        inputs = self.tokenizer(
+            texts,
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=512,
+        )
+
+        with torch.no_grad():
+            outputs = self.model.generate(
+                inputs["input_ids"],
+                attention_mask=inputs["attention_mask"],
+                max_length=512,
+                num_beams=4,
+                early_stopping=True,
+            )
+
+        return self.tokenizer.batch_decode(outputs, skip_special_tokens=True)
 
 
-def translate_srt(
-    input_path: Path,
-    output_path: Path,
-    tokenizer,
-    model,
-    mode: str = "append",
-    batch_size: int = 32,
-    include_pronunciation: bool = False,
-    use_english_respeller: bool = True,
-) -> None:
-    if mode not in {"replace", "append"}:
-        raise ValueError("Неизвестный режим перевода")
+class EnglishRespeller:
+    """Responsible for phoneme to respelling conversion."""
 
-    lines = input_path.read_text(encoding="utf-8").splitlines()
+    VOWELS = {
+        "AA",
+        "AE",
+        "AH",
+        "AO",
+        "AW",
+        "AY",
+        "EH",
+        "ER",
+        "EY",
+        "IH",
+        "IY",
+        "OW",
+        "OY",
+        "UH",
+        "UW",
+    }
 
-    timestamp_pattern = re.compile(r"\d\d:\d\d:\d\d,\d\d\d")
+    PHONEME_MAP = {
+        "AA": "A",
+        "AE": "A",
+        "AH": "U",
+        "AO": "AW",
+        "AW": "OW",
+        "AY": "AY",
+        "EH": "E",
+        "ER": "ER",
+        "EY": "AY",
+        "IH": "I",
+        "IY": "EE",
+        "OW": "OH",
+        "OY": "OY",
+        "UH": "U",
+        "UW": "OO",
+        "B": "B",
+        "CH": "CH",
+        "D": "D",
+        "DH": "TH",
+        "F": "F",
+        "G": "G",
+        "HH": "H",
+        "JH": "J",
+        "K": "K",
+        "L": "L",
+        "M": "M",
+        "N": "N",
+        "NG": "NG",
+        "P": "P",
+        "R": "R",
+        "S": "S",
+        "SH": "SH",
+        "T": "T",
+        "TH": "TH",
+        "V": "V",
+        "W": "W",
+        "Y": "Y",
+        "Z": "Z",
+        "ZH": "ZH",
+    }
 
-    text_lines = []
-    text_indices = []
+    def __init__(self):
+        self.g2p = G2p()
 
-    for i, line in enumerate(lines):
-        stripped = line.strip()
+    def respell(self, text: str) -> str:
+        phonemes = self.g2p(text)
 
-        if (
-            stripped.isdigit()
-            or "-->" in line
-            or not stripped
-            or timestamp_pattern.search(line)
-        ):
-            continue
+        words = []
+        current = []
 
-        text_lines.append(stripped)
-        text_indices.append(i)
+        for p in phonemes:
+            if p == " ":
+                if current:
+                    words.append(self._render_word(current))
+                    current = []
+                continue
 
-    translations = []
+            current.append(p)
 
-    for i in range(0, len(text_lines), batch_size):
-        batch = text_lines[i : i + batch_size]
-        translations.extend(translate_batch(batch, tokenizer, model))
+        if current:
+            words.append(self._render_word(current))
 
-    translation_map = dict(zip(text_indices, translations))
+        return " ".join(words)
 
-    out_lines = []
+    def _render_word(self, phonemes: list[str]) -> str:
+        syllables = []
+        current = []
 
-    for i, line in enumerate(lines):
-        if i not in translation_map:
-            out_lines.append(line)
-            continue
+        for p in phonemes:
+            base = re.sub(r"\d", "", p)
 
-        translated = translation_map[i]
-
-        if mode == "replace":
-            out_lines.append(translated)
-
-        elif mode == "append":
-            out_lines.append(line)
-
-            if include_pronunciation:
-                if use_english_respeller:
-                    out_lines.append(respell_english(line))
-                else:
-                    out_lines.append(respell_sentence(line))
-
-            out_lines.append(translated)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("\n".join(out_lines), encoding="utf-8")
-
-
-def respell_sentence(text: str) -> str:
-    phonemes = g2p(text)
-
-    words = []
-    current = []
-
-    for p in phonemes:
-        if p == " ":
-            if current:
-                words.append(phonemes_to_respelling(current))
+            if base in self.VOWELS and current:
+                syllables.append(current)
                 current = []
-            continue
 
-        current.append(p)
+            current.append(p)
 
-    if current:
-        words.append(phonemes_to_respelling(current))
+        if current:
+            syllables.append(current)
 
-    return " ".join(words)
+        rendered = []
 
+        for syll in syllables:
+            stress = any(p.endswith("1") for p in syll)
 
-def phonemes_to_respelling(phonemes: list[str]) -> str:
-    out = []
+            parts = []
 
-    for p in phonemes:
-        p = re.sub(r"\d", "", p)
+            for p in syll:
+                base = re.sub(r"\d", "", p)
+                letters = self.PHONEME_MAP.get(base, base)
 
-        if p in PHONEME_MAP_EN:
-            out.append(PHONEME_MAP_EN[p])
-        else:
-            out.append(p.lower())
+                if stress:
+                    letters = letters.upper()
+                else:
+                    letters = letters.lower()
 
-    return "".join(out)
+                parts.append(letters)
 
+            rendered.append("".join(parts))
 
-def transcribe_video(video_path: Path) -> tuple[Path, str] | None:
-    """
-    Transcribe a video file using Whisper CLI.
-
-    Returns:
-        Tuple of (srt_file_path, stdout_output) or None if already exists
-    """
-    video_folder = video_path.parent
-    video_name = video_path.stem
-
-    # Create output directory for this video
-    output_dir = video_folder / video_name
-    output_dir.mkdir(exist_ok=True)
-
-    # Output paths - use video name for SRT file
-    srt_path = output_dir / f"{video_name}.srt"
-    stdout_path = output_dir / "stdout.txt"
-
-    # Skip if already transcribed
-    if srt_path.exists() and stdout_path.exists():
-        logger.info(f"  Transcription already exists, skipping Whisper")
-        return srt_path, stdout_path.read_text(encoding="utf-8")
-
-    # Run whisper command
-    cmd = [
-        "whisper",
-        str(video_path),
-        "--language",
-        LANGUAGE,
-        "--output_format",
-        "srt",
-        "--fp16",
-        "False",
-        "--verbose",
-        "True",
-    ]
-
-    logger.info("Starting Whisper transcription...")
-
-    env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"
-
-    # Execute with streaming stdout for real-time progress monitoring
-    process = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        cwd=video_folder,
-        bufsize=1,
-        env=env,
-    )
-
-    stdout_lines = []
-
-    if process.stdout:
-        while True:
-            line = process.stdout.readline()
-            if not line:
-                break
-
-            line = line.rstrip()
-            stdout_lines.append(line)
-            logger.info("Whisper: %s", line)
-
-    process.wait()
-
-    # Combine stdout for saving to file
-    stdout_content = "\n".join(stdout_lines)
-
-    # Whisper outputs SRT file with same name as video, move it to our output dir
-    whisper_srt_path = video_path.with_suffix(".srt")
-    if whisper_srt_path.exists():
-        whisper_srt_path.rename(srt_path)
-
-    # Write stdout to file
-    stdout_path.write_text(stdout_content, encoding="utf-8")
-
-    if process.returncode != 0:
-        logger.error(f"Whisper failed with return code {process.returncode}")
-
-    return srt_path, stdout_content
+        return "-".join(rendered)
 
 
-def process_srt_file(
-    video_path: Path,
-    srt_path: Path,
-    output_dir: Path,
-    tokenizer,
-    model,
-    use_english_respeller: bool,
-) -> tuple[Path, Path] | None:
-    """
-    Process SRT file: translate and save in different encodings.
+class SRTTranslator:
+    """Responsible for SRT parsing and translation."""
 
-    Returns:
-        Tuple of (translated_windows1251_path, translated_utf8_path) or None if already exists
-    """
-    video_name = video_path.stem
+    TIMESTAMP = re.compile(r"\d\d:\d\d:\d\d,\d\d\d")
 
-    # Create translated directories
-    translated_dir_windows1251 = output_dir / "translated_windows1251"
-    translated_dir_utf8 = output_dir / "translated_utf8"
+    def __init__(
+        self,
+        translator: TranslationModel,
+        respeller: EnglishRespeller | None = None,
+        batch_size: int = 32,
+    ):
+        self.translator = translator
+        self.respeller = respeller
+        self.batch_size = batch_size
 
-    translated_dir_windows1251.mkdir(exist_ok=True)
-    translated_dir_utf8.mkdir(exist_ok=True)
+    def translate_file(
+        self,
+        input_path: Path,
+        output_path: Path,
+        append: bool = True,
+    ) -> None:
+        lines = input_path.read_text(encoding="utf-8").splitlines()
 
-    # Output paths for translated files (use video name)
-    translated_windows1251_path = translated_dir_windows1251 / f"{video_name}.srt"
-    translated_utf8_path = translated_dir_utf8 / f"{video_name}.srt"
+        text_lines = []
+        indices = []
 
-    # Skip if already translated
-    if translated_windows1251_path.exists() and translated_utf8_path.exists():
-        logger.info(f"  Translation already exists, skipping")
-        return translated_windows1251_path, translated_utf8_path
+        for i, line in enumerate(lines):
+            stripped = line.strip()
 
-    # Translate and save in UTF-8 first
-    translate_srt(
-        input_path=srt_path,
-        output_path=translated_utf8_path,
-        tokenizer=tokenizer,
-        model=model,
-        mode="append",
-        batch_size=32,
-        include_pronunciation=True,
-        use_english_respeller=use_english_respeller,
-    )
+            if (
+                stripped.isdigit()
+                or "-->" in line
+                or not stripped
+                or self.TIMESTAMP.search(line)
+            ):
+                continue
 
-    # Read translated UTF-8 content and save as Windows-1251
-    translated_content = translated_utf8_path.read_text(encoding="utf-8")
-    translated_windows1251_path.write_text(translated_content, encoding="windows-1251")
+            text_lines.append(stripped)
+            indices.append(i)
 
-    return translated_windows1251_path, translated_utf8_path
+        translations = self._translate_batches(text_lines)
+
+        mapping = dict(zip(indices, translations))
+
+        out = []
+
+        for i, line in enumerate(lines):
+            if i not in mapping:
+                out.append(line)
+                continue
+
+            translated = mapping[i]
+
+            if append:
+                out.append(line)
+
+                if self.respeller:
+                    out.append(self.respeller.respell(line))
+
+                out.append(translated)
+            else:
+                out.append(translated)
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        output_path.write_text("\n".join(out), encoding="utf-8")
+
+    def _translate_batches(self, lines: list[str]) -> list[str]:
+        results = []
+
+        for i in range(0, len(lines), self.batch_size):
+            batch = lines[i : i + self.batch_size]
+            results.extend(self.translator.translate(batch))
+
+        return results
 
 
-def create_duplicate_in_video_folder(
-    video_path: Path, translated_utf8_path: Path, encoding: str
-) -> Path:
-    """
-    Create a duplicate of the translated SRT file in the video folder.
+class WhisperTranscriber:
+    """Responsible for Whisper CLI transcription."""
 
-    Returns:
-        Path to the duplicate file
-    """
-    video_name = video_path.stem
-    content = translated_utf8_path.read_text(encoding="utf-8")
-    duplicate_path = video_path.parent / f"{video_name}.srt"
-    duplicate_path.write_text(content, encoding=encoding)
-    return duplicate_path
+    def __init__(self, language: str):
+        self.language = language
 
-
-def main():
-    if not VIDEO_FOLDER.exists():
-        logger.error(f"Video folder does not exist: {VIDEO_FOLDER}")
-        return
-
-    # Load translation model
-    model_name = "Helsinki-NLP/opus-mt-en-ru"
-    logger.info(f"Loading translation model: {model_name}")
-    tokenizer, model = load_model(model_name, hf_token=HF_TOKEN)
-
-    # Determine respeller mode based on LANGUAGE env var
-    use_english_respeller = LANGUAGE.lower() == "en"
-
-    # Get list of videos
-    video_files = list(VIDEO_FOLDER.glob("*.mp4"))
-    total_videos = len(video_files)
-
-    if not video_files:
-        logger.warning(f"No .mp4 files found in {VIDEO_FOLDER}")
-        return
-
-    logger.info(f"Found {total_videos} video(s) to process")
-
-    for idx, video_path in enumerate(video_files, 1):
-        logger.info(f"\n{'='*60}")
-        logger.info(f"Video {idx}/{total_videos}: {video_path.name}")
-        logger.info(f"{'='*60}")
-
+    def transcribe(self, video_path: Path, output_dir: Path) -> tuple[Path, str]:
         video_name = video_path.stem
-        output_dir = video_path.parent / video_name
 
-        # Check what needs to be done
         srt_path = output_dir / f"{video_name}.srt"
         stdout_path = output_dir / "stdout.txt"
-        translated_windows1251_path = output_dir / "translated_windows1251" / f"{video_name}.srt"
-        translated_utf8_path = output_dir / "translated_utf8" / f"{video_name}.srt"
-        duplicate_path_in_video = video_path.parent / f"{video_name}.srt"
+
+        if srt_path.exists() and stdout_path.exists():
+            logger.info("Transcription already exists")
+            return srt_path, stdout_path.read_text(encoding="utf-8")
+
+        cmd = [
+            "whisper",
+            str(video_path),
+            "--language",
+            self.language,
+            "--output_format",
+            "srt",
+        ]
+
+        logger.info("Starting Whisper transcription...")
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            cwd=video_path.parent,
+            bufsize=1,
+        )
+
+        lines = []
+
+        if process.stdout:
+            for line in process.stdout:
+                line = line.rstrip()
+                lines.append(line)
+                logger.info("Whisper: %s", line)
+
+        process.wait()
+
+        stdout_content = "\n".join(lines)
+        stdout_path.write_text(stdout_content, encoding="utf-8")
+
+        whisper_srt = video_path.with_suffix(".srt")
+
+        if whisper_srt.exists():
+            whisper_srt.rename(srt_path)
+
+        if process.returncode != 0:
+            logger.error("Whisper failed with return code %s", process.returncode)
+
+        return srt_path, stdout_content
+
+
+class VideoPipeline:
+    """Responsible for orchestrating the video processing workflow."""
+
+    def __init__(
+        self,
+        video_folder: Path,
+        translator: SRTTranslator,
+        transcriber: WhisperTranscriber,
+        duplicate_encoding: str = "utf-8",
+        output_folder: Path | None = None,
+    ):
+        self.video_folder = video_folder
+        self.translator = translator
+        self.transcriber = transcriber
+        self.duplicate_encoding = duplicate_encoding
+        self.output_folder = output_folder
+
+    def run(self) -> None:
+        if not self.video_folder.exists():
+            logger.error("Video folder does not exist: %s", self.video_folder)
+            return
+
+        if self.output_folder:
+            self.output_folder.mkdir(parents=True, exist_ok=True)
+            logger.info("Output folder: %s", self.output_folder)
+
+        videos = list(self.video_folder.glob("*.mp4"))
+
+        if not videos:
+            logger.warning("No .mp4 files found in %s", self.video_folder)
+            return
+
+        logger.info("Found %d video(s) to process", len(videos))
+
+        for idx, video in enumerate(videos, 1):
+            logger.info("")
+            logger.info("=" * 60)
+            logger.info("Video %d/%d: %s", idx, len(videos), video.name)
+            logger.info("=" * 60)
+
+            self._process_video(video)
+
+    def _process_video(self, video: Path) -> None:
+        name = video.stem
+        output_dir = video.parent / name
+
+        output_dir.mkdir(exist_ok=True)
+
+        srt_path = output_dir / f"{name}.srt"
+        stdout_path = output_dir / "stdout.txt"
+        translated_windows1251 = output_dir / "translated_windows1251" / f"{name}.srt"
+        translated_utf8 = output_dir / "translated_utf8" / f"{name}.srt"
+        duplicate_path = video.parent / f"{name}.srt"
 
         transcription_exists = srt_path.exists() and stdout_path.exists()
-        translation_exists = translated_windows1251_path.exists() and translated_utf8_path.exists()
-        duplicate_exists = duplicate_path_in_video.exists()
+        translation_exists = translated_windows1251.exists() and translated_utf8.exists()
+        duplicate_exists = duplicate_path.exists()
 
-        # Skip if everything is already done
         if transcription_exists and translation_exists and duplicate_exists:
-            logger.info(f"Skipping {video_path.name}: all outputs already exist")
+            logger.info("Skipping %s: all outputs already exist", video.name)
 
-            # Move to output folder if specified
-            if OUTPUT_FOLDER:
-                _move_to_output_folder(video_path, output_dir, OUTPUT_FOLDER)
+            if self.output_folder:
+                self._move_to_output_folder(video, output_dir)
 
-            continue
+            return
 
-        logger.info(f"Processing: {video_path.name}")
+        logger.info("Processing: %s", video.name)
 
-        # Step 1: Transcribe (if needed)
         if transcription_exists:
-            logger.info(f"  Transcription already exists, skipping Whisper")
+            logger.info("  Transcription already exists, skipping Whisper")
         else:
-            srt_path, stdout = transcribe_video(video_path)
-            logger.info(f"  Created SRT: {srt_path}")
+            srt_path, _ = self.transcriber.transcribe(video, output_dir)
+            logger.info("  Created SRT: %s", srt_path)
 
-        # Step 2: Translate (if needed)
         if translation_exists:
-            logger.info(f"  Translation already exists, skipping")
+            logger.info("  Translation already exists, skipping")
         else:
-            translated_windows1251_path, translated_utf8_path = process_srt_file(
-                video_path,
-                srt_path,
-                output_dir,
-                tokenizer,
-                model,
-                use_english_respeller,
-            )
-            logger.info(f"  Created translated files:")
-            logger.info(f"    {translated_windows1251_path}")
-            logger.info(f"    {translated_utf8_path}")
+            self.translator.translate_file(srt_path, translated_utf8, append=True)
 
-        # Step 3: Create duplicate in video folder (if needed)
+            translated_content = translated_utf8.read_text(encoding="utf-8")
+            translated_windows1251.parent.mkdir(parents=True, exist_ok=True)
+            translated_windows1251.write_text(translated_content, encoding="windows-1251")
+
+            logger.info("  Created translated files:")
+            logger.info("    %s", translated_windows1251)
+            logger.info("    %s", translated_utf8)
+
         if duplicate_exists:
-            logger.info(f"  Duplicate already exists, skipping")
+            logger.info("  Duplicate already exists, skipping")
         else:
-            duplicate_path = create_duplicate_in_video_folder(
-                video_path, translated_utf8_path, DUPLICATE_SRT_ENCODING
-            )
+            self._duplicate(video, translated_utf8)
             logger.info(
-                f"  Created duplicate: {duplicate_path} (encoding: {DUPLICATE_SRT_ENCODING})"
+                "  Created duplicate: %s (encoding: %s)",
+                duplicate_path,
+                self.duplicate_encoding,
             )
 
-        logger.info(f"  Done!\n")
+        logger.info("  Done!")
 
-        # Move to output folder if specified
-        if OUTPUT_FOLDER:
-            _move_to_output_folder(video_path, output_dir, OUTPUT_FOLDER)
+        if self.output_folder:
+            self._move_to_output_folder(video, output_dir)
+
+    def _duplicate(self, video: Path, srt: Path) -> None:
+        content = srt.read_text(encoding="utf-8")
+        duplicate = video.parent / f"{video.stem}.srt"
+        duplicate.write_text(content, encoding=self.duplicate_encoding)
+
+    def _move_to_output_folder(self, video: Path, output_dir: Path) -> None:
+        video_name = video.stem
+        dest_dir = self.output_folder / video_name
+        dest_dir.mkdir(parents=True, exist_ok=True)
+
+        dest_video = dest_dir / f"{video_name}.mp4"
+
+        if video.exists() and not dest_video.exists():
+            shutil.move(str(video), str(dest_video))
+            logger.info("  Moved video to: %s", dest_video)
+
+        if output_dir.exists():
+            for item in output_dir.iterdir():
+                dest_item = dest_dir / item.name
+                if not dest_item.exists():
+                    shutil.move(str(item), str(dest_item))
+
+            if not any(output_dir.iterdir()):
+                output_dir.rmdir()
+
+            logger.info("  Moved output directory to: %s", dest_dir)
 
 
-def _move_to_output_folder(video_path: Path, output_dir: Path, output_folder: Path) -> None:
-    """Move video and its output directory to the output folder."""
-    video_name = video_path.stem
+def main() -> None:
+    video_folder = Path(os.getenv("VIDEO_FOLDER", ""))
+    duplicate_encoding = os.getenv("DUPLICATE_SRT_ENCODING", "utf-8")
+    language = os.getenv("LANGUAGE", "en")
+    hf_token = os.getenv("HF_TOKEN", None)
+    output_folder = os.getenv("OUTPUT_FOLDER", None)
 
-    # Create destination directory
-    dest_dir = output_folder / video_name
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    if output_folder:
+        output_folder = Path(output_folder)
 
-    # Move video file
-    dest_video = dest_dir / f"{video_name}.mp4"
-    if video_path.exists() and not dest_video.exists():
-        shutil.move(str(video_path), str(dest_video))
-        logger.info(f"  Moved video to: {dest_video}")
+    model = TranslationModel("Helsinki-NLP/opus-mt-en-ru", hf_token=hf_token)
 
-    # Move output directory (subtitles, translations, etc.)
-    if output_dir.exists():
-        for item in output_dir.iterdir():
-            dest_item = dest_dir / item.name
-            if not dest_item.exists():
-                shutil.move(str(item), str(dest_item))
-        # Remove empty output directory
-        if not any(output_dir.iterdir()):
-            output_dir.rmdir()
-        logger.info(f"  Moved output directory to: {dest_dir}")
+    respeller = EnglishRespeller()
+
+    srt_translator = SRTTranslator(
+        translator=model,
+        respeller=respeller,
+    )
+
+    transcriber = WhisperTranscriber(language=language)
+
+    pipeline = VideoPipeline(
+        video_folder=video_folder,
+        translator=srt_translator,
+        transcriber=transcriber,
+        duplicate_encoding=duplicate_encoding,
+        output_folder=output_folder,
+    )
+
+    pipeline.run()
 
 
 if __name__ == "__main__":
