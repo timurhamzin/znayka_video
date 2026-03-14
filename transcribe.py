@@ -17,6 +17,7 @@ video_folder/
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -51,6 +52,9 @@ VIDEO_FOLDER = Path(os.getenv("VIDEO_FOLDER", ""))
 DUPLICATE_SRT_ENCODING = os.getenv("DUPLICATE_SRT_ENCODING", "utf-8")
 LANGUAGE = os.getenv("LANGUAGE", "en")
 HF_TOKEN = os.getenv("HF_TOKEN", None)
+OUTPUT_FOLDER = os.getenv("OUTPUT_FOLDER", None)
+if OUTPUT_FOLDER:
+    OUTPUT_FOLDER = Path(OUTPUT_FOLDER)
 
 VOWELS = {
     "AA",
@@ -481,7 +485,21 @@ def main():
     # Determine respeller mode based on LANGUAGE env var
     use_english_respeller = LANGUAGE.lower() == "en"
 
-    for video_path in VIDEO_FOLDER.glob("*.mp4"):
+    # Get list of videos
+    video_files = list(VIDEO_FOLDER.glob("*.mp4"))
+    total_videos = len(video_files)
+
+    if not video_files:
+        logger.warning(f"No .mp4 files found in {VIDEO_FOLDER}")
+        return
+
+    logger.info(f"Found {total_videos} video(s) to process")
+
+    for idx, video_path in enumerate(video_files, 1):
+        logger.info(f"\n{'='*60}")
+        logger.info(f"Video {idx}/{total_videos}: {video_path.name}")
+        logger.info(f"{'='*60}")
+
         video_name = video_path.stem
         output_dir = video_path.parent / video_name
 
@@ -494,10 +512,16 @@ def main():
 
         transcription_exists = srt_path.exists() and stdout_path.exists()
         translation_exists = translated_windows1251_path.exists() and translated_utf8_path.exists()
+        duplicate_exists = duplicate_path_in_video.exists()
 
         # Skip if everything is already done
-        if transcription_exists and translation_exists and duplicate_path_in_video.exists():
+        if transcription_exists and translation_exists and duplicate_exists:
             logger.info(f"Skipping {video_path.name}: all outputs already exist")
+
+            # Move to output folder if specified
+            if OUTPUT_FOLDER:
+                _move_to_output_folder(video_path, output_dir, OUTPUT_FOLDER)
+
             continue
 
         logger.info(f"Processing: {video_path.name}")
@@ -526,7 +550,7 @@ def main():
             logger.info(f"    {translated_utf8_path}")
 
         # Step 3: Create duplicate in video folder (if needed)
-        if duplicate_path_in_video.exists():
+        if duplicate_exists:
             logger.info(f"  Duplicate already exists, skipping")
         else:
             duplicate_path = create_duplicate_in_video_folder(
@@ -537,6 +561,36 @@ def main():
             )
 
         logger.info(f"  Done!\n")
+
+        # Move to output folder if specified
+        if OUTPUT_FOLDER:
+            _move_to_output_folder(video_path, output_dir, OUTPUT_FOLDER)
+
+
+def _move_to_output_folder(video_path: Path, output_dir: Path, output_folder: Path) -> None:
+    """Move video and its output directory to the output folder."""
+    video_name = video_path.stem
+
+    # Create destination directory
+    dest_dir = output_folder / video_name
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    # Move video file
+    dest_video = dest_dir / f"{video_name}.mp4"
+    if video_path.exists() and not dest_video.exists():
+        shutil.move(str(video_path), str(dest_video))
+        logger.info(f"  Moved video to: {dest_video}")
+
+    # Move output directory (subtitles, translations, etc.)
+    if output_dir.exists():
+        for item in output_dir.iterdir():
+            dest_item = dest_dir / item.name
+            if not dest_item.exists():
+                shutil.move(str(item), str(dest_item))
+        # Remove empty output directory
+        if not any(output_dir.iterdir()):
+            output_dir.rmdir()
+        logger.info(f"  Moved output directory to: {dest_dir}")
 
 
 if __name__ == "__main__":
