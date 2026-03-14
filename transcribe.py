@@ -22,6 +22,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Disable HuggingFace and Transformers network access
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
 import nltk
 import torch
 from dotenv import load_dotenv
@@ -36,12 +40,6 @@ logging.basicConfig(
     stream=sys.stdout,
 )
 logger = logging.getLogger(__name__)
-
-for pkg in ["averaged_perceptron_tagger_eng", "cmudict", "punkt"]:
-    try:
-        nltk.data.find(pkg)
-    except LookupError:
-        nltk.download(pkg)
 
 
 class TranslationModel:
