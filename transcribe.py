@@ -51,13 +51,11 @@ class TranslationModel:
         self.tokenizer = MarianTokenizer.from_pretrained(
             model_name,
             local_files_only=True,
-            use_auth_token=hf_token,
         )
 
         self.model = MarianMTModel.from_pretrained(
             model_name,
             local_files_only=True,
-            use_auth_token=hf_token,
         )
 
         self.model.eval()
@@ -217,20 +215,20 @@ class SRTTranslator:
     TIMESTAMP = re.compile(r"\d\d:\d\d:\d\d,\d\d\d")
 
     def __init__(
-        self,
-        translator: TranslationModel,
-        respeller: EnglishRespeller | None = None,
-        batch_size: int = 32,
+            self,
+            translator: TranslationModel,
+            respeller: EnglishRespeller | None = None,
+            batch_size: int = 32,
     ):
         self.translator = translator
         self.respeller = respeller
         self.batch_size = batch_size
 
     def translate_file(
-        self,
-        input_path: Path,
-        output_path: Path,
-        append: bool = True,
+            self,
+            input_path: Path,
+            output_path: Path,
+            append: bool = True,
     ) -> None:
         lines = input_path.read_text(encoding="utf-8").splitlines()
 
@@ -241,10 +239,10 @@ class SRTTranslator:
             stripped = line.strip()
 
             if (
-                stripped.isdigit()
-                or "-->" in line
-                or not stripped
-                or self.TIMESTAMP.search(line)
+                    stripped.isdigit()
+                    or "-->" in line
+                    or not stripped
+                    or self.TIMESTAMP.search(line)
             ):
                 continue
 
@@ -282,7 +280,7 @@ class SRTTranslator:
         results = []
 
         for i in range(0, len(lines), self.batch_size):
-            batch = lines[i : i + self.batch_size]
+            batch = lines[i: i + self.batch_size]
             results.extend(self.translator.translate(batch))
 
         return results
@@ -352,12 +350,12 @@ class VideoPipeline:
     """Responsible for orchestrating the video processing workflow."""
 
     def __init__(
-        self,
-        video_folder: Path,
-        translator: SRTTranslator,
-        transcriber: WhisperTranscriber,
-        duplicate_encoding: str = "utf-8",
-        output_folder: Path | None = None,
+            self,
+            video_folder: Path,
+            translator: SRTTranslator,
+            transcriber: WhisperTranscriber,
+            duplicate_encoding: str = "utf-8",
+            output_folder: Path | None = None,
     ):
         self.video_folder = video_folder
         self.translator = translator
@@ -429,7 +427,11 @@ class VideoPipeline:
 
             translated_content = translated_utf8.read_text(encoding="utf-8")
             translated_windows1251.parent.mkdir(parents=True, exist_ok=True)
-            translated_windows1251.write_text(translated_content, encoding="windows-1251")
+            translated_windows1251.write_text(
+                translated_content,
+                encoding='windows-1251',
+                errors='replace',
+            )
 
             logger.info("  Created translated files:")
             logger.info("    %s", translated_windows1251)
