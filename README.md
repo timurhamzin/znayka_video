@@ -8,15 +8,13 @@ Install Node.js runtime (required for YouTube extraction):
 winget install OpenJS.NodeJS
 ```
 
-This resolves the warning: `WARNING: [youtube] No supported JavaScript runtime could be found`.
-
 ## Install Dependencies
 
 ```bash
 uv sync
 ```
 
-## Download NLTK Data (Required for phonetic transcription)
+## Download NLTK Data (Required for English phonetic respelling)
 
 Run once after installation:
 
@@ -24,149 +22,94 @@ Run once after installation:
 python -m nltk.downloader averaged_perceptron_tagger cmudict punkt
 ```
 
-Or download programmatically:
-
-```python
-import nltk
-nltk.download('averaged_perceptron_tagger')
-nltk.download('cmudict')
-nltk.download('punkt')
-```
-
 ## Configure Environment
 
-1. Create a `.env` file (copy from `.env.example` if available) and configure:
+Copy `.env.example` to `.env` and edit these variables.
+
+### Downloader vars
 
 ```env
-# Video processing
-VIDEO_FOLDER=path/to/your/videos
-DUPLICATE_SRT_ENCODING=utf-8
-LANGUAGE=en
-
-# HuggingFace token (optional, for faster model downloads)
-HF_TOKEN=your_huggingface_token
-
-# Output folder for processed videos (optional)
-OUTPUT_FOLDER=path/to/output/folder
+DOWNLOAD_URL=https://example.com/video-or-playlist
+VIDEO_RESOLUTION=720p
 ```
 
-2. Run the transcriber:
+### `transcribe.py` vars (keep together)
+
+```env
+TRANSCRIBE_VIDEO_FOLDER=path/to/folder/with/mp4
+TRANSCRIBE_WHISPER_LANGUAGE=fr
+TRANSCRIBE_TRANSLATION_SOURCE_LANGUAGE=fr
+TRANSCRIBE_TRANSLATION_TARGET_LANGUAGE=en
+TRANSCRIBE_TRANSLATION_MODEL=
+TRANSCRIBE_ENABLE_PHONETIC=true
+TRANSCRIBE_PHONETIC_LANGUAGE=en
+TRANSCRIBE_DUPLICATE_SRT_ENCODING=utf-8
+TRANSCRIBE_HF_TOKEN=your_hf_token
+TRANSCRIBE_OUTPUT_FOLDER=
+```
+
+Notes:
+- If `TRANSCRIBE_TRANSLATION_MODEL` is empty, model is auto-selected from source/target language pair.
+- English phonetic respelling works only when source language is English. For French source, phonetic lines are skipped.
+- Legacy vars (`VIDEO_FOLDER`, `LANGUAGE`, `DUPLICATE_SRT_ENCODING`, `HF_TOKEN`, `OUTPUT_FOLDER`) are still supported for backward compatibility.
+
+## Run Scripts (activate `.venv` automatically)
+
+### Windows (PowerShell)
+
+```powershell
+./run_download.ps1
+./run_transcribe.ps1
+```
+
+### Linux/macOS (bash)
 
 ```bash
-python transcribe.py
+chmod +x run_download.sh run_transcribe.sh
+./run_download.sh
+./run_transcribe.sh
 ```
 
-> NOTE: I do not encourage to download any copyright content from Youtube, this script is for educational purpose only.
+## French Video -> English Translation Example
 
-# Scripts
+Set:
 
-## download_video.py - Video Downloader (YouTube/VK)
-
-Downloads videos with `yt-dlp` from a URL. Supports both playlist and single-video links.
-
-**Configuration** (in `.env`):
-- `DOWNLOAD_URL` - YouTube or VK URL (playlist or single video)
-- `PLAYLIST_URL` - Legacy fallback variable (optional)
-- `VIDEO_RESOLUTION` - Video quality (`360p` or `720p`)
-
-**Usage**:
-```bash
-python download_video.py
+```env
+TRANSCRIBE_WHISPER_LANGUAGE=fr
+TRANSCRIBE_TRANSLATION_SOURCE_LANGUAGE=fr
+TRANSCRIBE_TRANSLATION_TARGET_LANGUAGE=en
 ```
 
-## translate_srt.py - SRT Subtitle Translator
+This will transcribe French audio and translate subtitles to English.
 
-Translates SRT subtitle files from English to Russian using MarianMT model.
-Optionally adds phonetic transcription (respelling) for pronunciation help.
+## Scripts
 
-**Features**:
-- Batch translation for efficiency
-- Phonetic respelling with stress markers (for English)
-- Append mode: keeps original + adds pronunciation + translation
+## `download_video.py`
 
-**Configuration** (in `.env`):
-- `LANGUAGE` - Phonetics mode: `en` for detailed English respelling with syllables/stress
-- `INPUT_SRT_FOLDER` - Folder containing input `.srt` files
-- `OUTPUT_SRT_FOLDER` - Folder for translated `.srt` files (created if doesn't exist)
+Downloads from YouTube/VK using `yt-dlp`.
 
-**Usage**:
-```bash
-# With English phonetic respelling (syllables + stress markers)
-LANGUAGE=en python translate_srt.py
+Reads:
+- `DOWNLOAD_URL` (or legacy `PLAYLIST_URL`)
+- `VIDEO_RESOLUTION`
 
-# With simple phonetic transcription
-LANGUAGE=other python translate_srt.py
-```
+## `transcribe.py`
 
-The script processes all `.srt` files in the input folder and saves translated versions to the output folder.
+Pipeline:
+- Whisper transcription (`--language` from `TRANSCRIBE_WHISPER_LANGUAGE`)
+- MarianMT translation (`TRANSCRIBE_TRANSLATION_SOURCE_LANGUAGE` -> `TRANSCRIBE_TRANSLATION_TARGET_LANGUAGE`)
+- Optional English phonetic respelling
+- UTF-8 + Windows-1251 translated outputs
+- Duplicate SRT in `TRANSCRIBE_DUPLICATE_SRT_ENCODING`
+- Optional move to `TRANSCRIBE_OUTPUT_FOLDER`
 
-## transcribe.py - Video Transcription and Translation Pipeline
+> NOTE: Use responsibly and only with content you are allowed to process.
 
-Complete pipeline for transcribing videos with Whisper and translating subtitles.
+## Requirements
 
-**Features**:
-- Whisper CLI transcription with real-time progress output
-- English-to-Russian translation with MarianMT
-- Phonetic respelling with syllables and stress markers
-- Multi-encoding output (UTF-8 and Windows-1251)
-- Skips already processed steps (resume support)
-- Optional: move completed videos to output folder
-
-**Configuration** (in `.env`):
-- `VIDEO_FOLDER` - Folder containing `.mp4` video files
-- `LANGUAGE` - Transcription language: `en` for English
-- `DUPLICATE_SRT_ENCODING` - Encoding for duplicate SRT file (e.g., `utf-8`, `windows-1251`)
-- `HF_TOKEN` - HuggingFace token (optional, for faster model downloads)
-- `OUTPUT_FOLDER` - Destination folder for processed videos (optional)
-
-**Directory structure created**:
-```
-video_folder/
-├── video_file.mp4
-├── video_file.srt (translated, in DUPLICATE_SRT_ENCODING)
-└── video_file_name/
-    ├── original/
-    │   └── video_file.srt (original transcription)
-    ├── stdout.txt (Whisper output)
-    ├── translated_windows1251/
-    │   └── video_file.srt
-    └── translated_utf8/
-        └── video_file.srt
-```
-
-**Usage**:
-```bash
-python transcribe.py
-```
-
-The script processes videos one by one, showing progress in the console.
-
-
-# Requirements
-Managed by `uv`. Dependencies include:
-- pytube
-- requests
-- transformers (for translation)
-- g2p-en (for phonetic transcription)
-- torch
-- nltk (for text processing)
-- openai-whisper (for transcription)
-
-
-# How it works?
-
-## download_video.py
-Uses `yt-dlp` to download media from a provided URL (playlist or single item).
-
-## translate_srt.py
-- Loads MarianMT model (`Helsinki-NLP/opus-mt-en-ru`) for English-to-Russian translation
-- Uses `g2p-en` for grapheme-to-phoneme conversion
-- Processes subtitles in batches for efficiency
-- Outputs multiline subtitles: original + pronunciation + translation
-
-## transcribe.py
-- **WhisperTranscriber**: Runs Whisper CLI, streams output to console
-- **TranslationModel**: Loads MarianMT for batch translation
-- **EnglishRespeller**: Converts phonemes to readable respelling with stress
-- **SRTTranslator**: Parses SRT, translates text lines in batches
-- **VideoPipeline**: Orchestrates the workflow, handles caching and file moves
+Managed by `uv`. Main dependencies:
+- `yt-dlp`
+- `transformers`
+- `g2p-en`
+- `torch`
+- `nltk`
+- `openai-whisper`

@@ -43,6 +43,37 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _first_env(*names: str, default: str | None = None) -> str | None:
+    for name in names:
+        value = os.getenv(name)
+        if value is not None and value.strip() != "":
+            return value.strip()
+    return default
+
+
+def resolve_translation_model(source_language: str, target_language: str) -> str:
+    language_pair = f"{source_language.lower()}-{target_language.lower()}"
+
+    predefined_models = {
+        "en-ru": "Helsinki-NLP/opus-mt-en-ru",
+        "en-fr": "Helsinki-NLP/opus-mt-en-fr",
+        "fr-en": "Helsinki-NLP/opus-mt-fr-en",
+        "fr-ru": "Helsinki-NLP/opus-mt-fr-ru",
+        "ru-en": "Helsinki-NLP/opus-mt-ru-en",
+    }
+
+    model_name = predefined_models.get(language_pair)
+
+    if model_name:
+        return model_name
+
+    raise ValueError(
+        f"Unsupported translation pair '{language_pair}'. "
+        "Set TRANSCRIBE_TRANSLATION_MODEL explicitly, "
+        "for example: Helsinki-NLP/opus-mt-fr-en"
+    )
+
+
 class TranslationModel:
     """Responsible for translation using MarianMT model."""
 
@@ -485,25 +516,72 @@ class VideoPipeline:
 
 
 def main() -> None:
-    video_folder = Path(os.getenv("VIDEO_FOLDER", ""))
-    duplicate_encoding = os.getenv("DUPLICATE_SRT_ENCODING", "utf-8")
-    language = os.getenv("LANGUAGE", "en")
-    hf_token = os.getenv("HF_TOKEN", None)
-    output_folder = os.getenv("OUTPUT_FOLDER", None)
+    video_folder_raw = _first_env("TRANSCRIBE_VIDEO_FOLDER", "VIDEO_FOLDER")
+    if not video_folder_raw:
+        raise RuntimeError(
+            "TRANSCRIBE_VIDEO_FOLDER (or legacy VIDEO_FOLDER) is not set in .env"
+        )
+
+    video_folder = Path(video_folder_raw)
+
+    duplicate_encoding = _first_env(
+        "TRANSCRIBE_DUPLICATE_SRT_ENCODING",
+        "DUPLICATE_SRT_ENCODING",
+        default="utf-8",
+    )
+
+    whisper_language = _first_env(
+        "TRANSCRIBE_WHISPER_LANGUAGE",
+        "LANGUAGE",
+        default="en",
+    )
+    translation_source_language = _first_env(
+        "TRANSCRIBE_TRANSLATION_SOURCE_LANGUAGE",
+        default=whisper_language,
+    )
+    translation_target_language = _first_env(
+        "TRANSCRIBE_TRANSLATION_TARGET_LANGUAGE",
+        default="ru",
+    )
+    translation_model_name = _first_env(
+        "TRANSCRIBE_TRANSLATION_MODEL",
+        default=None,
+    )
+    hf_token = _first_env("TRANSCRIBE_HF_TOKEN", "HF_TOKEN", default=None)
+    output_folder = _first_env("TRANSCRIBE_OUTPUT_FOLDER", "OUTPUT_FOLDER", default=None)
+    phonetic_enabled_raw = _first_env("TRANSCRIBE_ENABLE_PHONETIC", default="true")
+    phonetic_language = _first_env("TRANSCRIBE_PHONETIC_LANGUAGE", default="en")
+
+    if translation_model_name is None:
+        translation_model_name = resolve_translation_model(
+            translation_source_language,
+            translation_target_language,
+        )
 
     if output_folder:
         output_folder = Path(output_folder)
 
-    model = TranslationModel("Helsinki-NLP/opus-mt-en-ru", hf_token=hf_token)
+    model = TranslationModel(translation_model_name, hf_token=hf_token)
 
-    respeller = EnglishRespeller()
+    phonetic_enabled = phonetic_enabled_raw.lower() in {"1", "true", "yes", "on"}
+    use_english_respeller = (
+        phonetic_enabled
+        and phonetic_language.lower().startswith("en")
+        and translation_source_language.lower().startswith("en")
+    )
+    respeller = EnglishRespeller() if use_english_respeller else None
+
+    if phonetic_enabled and not use_english_respeller:
+        logger.info(
+            "Phonetic respelling is enabled but skipped: only English source language is supported."
+        )
 
     srt_translator = SRTTranslator(
         translator=model,
         respeller=respeller,
     )
 
-    transcriber = WhisperTranscriber(language=language)
+    transcriber = WhisperTranscriber(language=whisper_language)
 
     pipeline = VideoPipeline(
         video_folder=video_folder,

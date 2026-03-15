@@ -1,4 +1,31 @@
 IMPORTANT: When applicable, prefer using pycharm-index MCP tools (if available) for code navigation and refactoring.
 
 ## Project Rules
-- `.qwen/rules/python-codestyle.md` â€” Python code style and best practices
+- `.qwen/rules/python-codestyle.md` — Python code style and best practices
+
+## Transcribe Environment Variables
+- Use explicit `transcribe.py` variables grouped together in `.env`:
+  - `TRANSCRIBE_VIDEO_FOLDER`
+  - `TRANSCRIBE_WHISPER_LANGUAGE`
+  - `TRANSCRIBE_TRANSLATION_SOURCE_LANGUAGE`
+  - `TRANSCRIBE_TRANSLATION_TARGET_LANGUAGE`
+  - `TRANSCRIBE_TRANSLATION_MODEL`
+  - `TRANSCRIBE_ENABLE_PHONETIC`
+  - `TRANSCRIBE_PHONETIC_LANGUAGE`
+  - `TRANSCRIBE_DUPLICATE_SRT_ENCODING`
+  - `TRANSCRIBE_HF_TOKEN`
+  - `TRANSCRIBE_OUTPUT_FOLDER`
+- Keep legacy variables only for backward compatibility (`VIDEO_FOLDER`, `LANGUAGE`, `DUPLICATE_SRT_ENCODING`, `HF_TOKEN`, `OUTPUT_FOLDER`).
+- For French input translated to English, set:
+  - `TRANSCRIBE_WHISPER_LANGUAGE=fr`
+  - `TRANSCRIBE_TRANSLATION_SOURCE_LANGUAGE=fr`
+  - `TRANSCRIBE_TRANSLATION_TARGET_LANGUAGE=en`
+- English phonetic respelling is only supported when source language is English.
+
+## Run Scripts
+- Windows PowerShell:
+  - `./run_download.ps1`
+  - `./run_transcribe.ps1`
+- Linux/macOS bash:
+  - `./run_download.sh`
+  - `./run_transcribe.sh`
