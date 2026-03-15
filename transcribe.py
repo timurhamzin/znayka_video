@@ -453,7 +453,7 @@ class VideoPipeline:
     def _duplicate(self, video: Path, srt: Path) -> None:
         content = srt.read_text(encoding="utf-8")
         duplicate = video.parent / f"{video.stem}.srt"
-        duplicate.write_text(content, encoding=self.duplicate_encoding)
+        duplicate.write_text(content, encoding=self.duplicate_encoding, errors='replace')
 
     def _move_to_output_folder(self, video: Path, output_dir: Path) -> None:
         video_name = video.stem
