@@ -60,12 +60,13 @@ python transcribe.py
 
 # Scripts
 
-## download_video.py - YouTube Playlist Downloader
+## download_video.py - Video Downloader (YouTube/VK)
 
-Downloads entire YouTube playlists using pytube's native `Playlist` class.
+Downloads videos with `yt-dlp` from a URL. Supports both playlist and single-video links.
 
 **Configuration** (in `.env`):
-- `PLAYLIST_URL` - YouTube playlist URL
+- `DOWNLOAD_URL` - YouTube or VK URL (playlist or single video)
+- `PLAYLIST_URL` - Legacy fallback variable (optional)
 - `VIDEO_RESOLUTION` - Video quality (`360p` or `720p`)
 
 **Usage**:
@@ -124,7 +125,8 @@ video_folder/
 ├── video_file.mp4
 ├── video_file.srt (translated, in DUPLICATE_SRT_ENCODING)
 └── video_file_name/
-    ├── video_file.srt (original transcription)
+    ├── original/
+    │   └── video_file.srt (original transcription)
     ├── stdout.txt (Whisper output)
     ├── translated_windows1251/
     │   └── video_file.srt
@@ -154,7 +156,7 @@ Managed by `uv`. Dependencies include:
 # How it works?
 
 ## download_video.py
-Uses pytube's native `Playlist` class to fetch all videos from a playlist and download them sequentially.
+Uses `yt-dlp` to download media from a provided URL (playlist or single item).
 
 ## translate_srt.py
 - Loads MarianMT model (`Helsinki-NLP/opus-mt-en-ru`) for English-to-Russian translation

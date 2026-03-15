@@ -4,9 +4,10 @@ Transcribe video files using Whisper and process SRT files with translation.
 Directory structure for each video:
 video_folder/
 ├── video_file.mp4
-├── video_file.srt (duplicate in DUPLICATE_SRT_ENCODING)
+├── video_file.srt (translated, in DUPLICATE_SRT_ENCODING)
 └── video_file_name/
-    ├── video_file.srt (original, utf-8)
+    ├── original/
+    │   └── video_file.srt (original transcription, utf-8)
     ├── stdout.txt
     ├── translated_windows1251/
     │   └── video_file.srt
@@ -293,7 +294,11 @@ class WhisperTranscriber:
     def transcribe(self, video_path: Path, output_dir: Path) -> tuple[Path, str]:
         video_name = video_path.stem
 
-        srt_path = output_dir / f"{video_name}.srt"
+        # Create original subfolder
+        original_dir = output_dir / "original"
+        original_dir.mkdir(exist_ok=True)
+
+        srt_path = original_dir / f"{video_name}.srt"
         stdout_path = output_dir / "stdout.txt"
 
         if srt_path.exists() and stdout_path.exists():
@@ -392,13 +397,13 @@ class VideoPipeline:
 
         output_dir.mkdir(exist_ok=True)
 
-        srt_path = output_dir / f"{name}.srt"
+        original_srt = output_dir / "original" / f"{name}.srt"
         stdout_path = output_dir / "stdout.txt"
         translated_windows1251 = output_dir / "translated_windows1251" / f"{name}.srt"
         translated_utf8 = output_dir / "translated_utf8" / f"{name}.srt"
         duplicate_path = video.parent / f"{name}.srt"
 
-        transcription_exists = srt_path.exists() and stdout_path.exists()
+        transcription_exists = original_srt.exists() and stdout_path.exists()
         translation_exists = translated_windows1251.exists() and translated_utf8.exists()
         duplicate_exists = duplicate_path.exists()
 
@@ -414,6 +419,7 @@ class VideoPipeline:
 
         if transcription_exists:
             logger.info("  Transcription already exists, skipping Whisper")
+            srt_path = original_srt
         else:
             srt_path, _ = self.transcriber.transcribe(video, output_dir)
             logger.info("  Created SRT: %s", srt_path)
@@ -427,8 +433,8 @@ class VideoPipeline:
             translated_windows1251.parent.mkdir(parents=True, exist_ok=True)
             translated_windows1251.write_text(
                 translated_content,
-                encoding='windows-1251',
-                errors='replace',
+                encoding="windows-1251",
+                errors="replace",
             )
 
             logger.info("  Created translated files:")
