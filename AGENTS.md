@@ -1,7 +1,7 @@
-IMPORTANT: When applicable, prefer using pycharm-index MCP tools (if available) for code navigation and refactoring.
+﻿IMPORTANT: When applicable, prefer using pycharm-index MCP tools (if available) for code navigation and refactoring.
 
 ## Project Rules
-- `.qwen/rules/python-codestyle.md` � Python code style and best practices
+- `.qwen/rules/python-codestyle.md` — Python code style and best practices
 
 ## Transcribe Environment Variables
 - Use explicit `transcribe.py` variables grouped together in `.env`:
@@ -14,6 +14,7 @@ IMPORTANT: When applicable, prefer using pycharm-index MCP tools (if available) 
   - `TRANSCRIBE_PHONETIC_LANGUAGE`
   - `TRANSCRIBE_DUPLICATE_SRT_ENCODING`
   - `TRANSCRIBE_HF_TOKEN`
+  - `TRANSCRIBE_OFFLINE_MODE`
   - `TRANSCRIBE_OUTPUT_FOLDER`
 - Keep legacy variables only for backward compatibility (`VIDEO_FOLDER`, `LANGUAGE`, `DUPLICATE_SRT_ENCODING`, `HF_TOKEN`, `OUTPUT_FOLDER`).
 - For French input translated to English, set:
@@ -21,11 +22,17 @@ IMPORTANT: When applicable, prefer using pycharm-index MCP tools (if available) 
   - `TRANSCRIBE_TRANSLATION_SOURCE_LANGUAGE=fr`
   - `TRANSCRIBE_TRANSLATION_TARGET_LANGUAGE=en`
 - English phonetic respelling is only supported when source language is English.
+- Keep `TRANSCRIBE_OFFLINE_MODE=false` for first run so models can be downloaded.
 
 ## Run Scripts
 - Windows PowerShell:
-  - `./run_download.ps1`
-  - `./run_transcribe.ps1`
+  - `.\run_download.ps1`
+  - `.\run_transcribe.ps1`
 - Linux/macOS bash:
   - `./run_download.sh`
   - `./run_transcribe.sh`
+
+## Dependency Installation
+- Install/update env with `uv sync`.
+- If runtime errors mention missing tokenizer/model deps, run `uv sync --reinstall`.
+- `transcribe.py` requires `sentencepiece` and `protobuf` for Marian tokenizer/model loading.

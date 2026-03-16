@@ -23,10 +23,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Disable HuggingFace and Transformers network access
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1"
-
 import nltk
 import torch
 from dotenv import load_dotenv
@@ -77,15 +73,26 @@ def resolve_translation_model(source_language: str, target_language: str) -> str
 class TranslationModel:
     """Responsible for translation using MarianMT model."""
 
-    def __init__(self, model_name: str, hf_token: str | None = None):
+    def __init__(
+            self,
+            model_name: str,
+            hf_token: str | None = None,
+            local_files_only: bool = False,
+    ):
+        auth_kwargs = {}
+        if hf_token:
+            auth_kwargs["token"] = hf_token
+
         self.tokenizer = MarianTokenizer.from_pretrained(
             model_name,
-            local_files_only=True,
+            local_files_only=local_files_only,
+            **auth_kwargs,
         )
 
         self.model = MarianMTModel.from_pretrained(
             model_name,
-            local_files_only=True,
+            local_files_only=local_files_only,
+            **auth_kwargs,
         )
 
         self.model.eval()
@@ -347,6 +354,10 @@ class WhisperTranscriber:
 
         logger.info("Starting Whisper transcription...")
 
+        env = os.environ.copy()
+        env["PYTHONUTF8"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
+
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -354,6 +365,7 @@ class WhisperTranscriber:
             text=True,
             cwd=video_path.parent,
             bufsize=1,
+            env=env,
         )
 
         lines = []
@@ -375,7 +387,15 @@ class WhisperTranscriber:
             whisper_srt.rename(srt_path)
 
         if process.returncode != 0:
-            logger.error("Whisper failed with return code %s", process.returncode)
+            raise RuntimeError(
+                f"Whisper failed with return code {process.returncode} for {video_path.name}"
+            )
+
+        if not srt_path.exists():
+            raise RuntimeError(
+                f"Whisper finished without creating SRT for {video_path.name}. "
+                "Check stdout.txt for details."
+            )
 
         return srt_path, stdout_content
 
@@ -420,7 +440,11 @@ class VideoPipeline:
             logger.info("Video %d/%d: %s", idx, len(videos), video.name)
             logger.info("=" * 60)
 
-            self._process_video(video)
+            try:
+                self._process_video(video)
+            except Exception as error:
+                logger.exception("Failed to process %s: %s", video.name, error)
+                continue
 
     def _process_video(self, video: Path) -> None:
         name = video.stem
@@ -551,6 +575,7 @@ def main() -> None:
     output_folder = _first_env("TRANSCRIBE_OUTPUT_FOLDER", "OUTPUT_FOLDER", default=None)
     phonetic_enabled_raw = _first_env("TRANSCRIBE_ENABLE_PHONETIC", default="true")
     phonetic_language = _first_env("TRANSCRIBE_PHONETIC_LANGUAGE", default="en")
+    offline_mode_raw = _first_env("TRANSCRIBE_OFFLINE_MODE", default="false")
 
     if translation_model_name is None:
         translation_model_name = resolve_translation_model(
@@ -561,7 +586,25 @@ def main() -> None:
     if output_folder:
         output_folder = Path(output_folder)
 
-    model = TranslationModel(translation_model_name, hf_token=hf_token)
+    offline_mode = offline_mode_raw.lower() in {"1", "true", "yes", "on"}
+    if offline_mode:
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        os.environ["TRANSFORMERS_OFFLINE"] = "1"
+    else:
+        os.environ.pop("HF_HUB_OFFLINE", None)
+        os.environ.pop("TRANSFORMERS_OFFLINE", None)
+
+    try:
+        model = TranslationModel(
+            translation_model_name,
+            hf_token=hf_token,
+            local_files_only=offline_mode,
+        )
+    except ImportError as error:
+        raise RuntimeError(
+            "Missing dependency for Marian translation model. "
+            "Install dependencies with 'uv sync' (protobuf/sentencepiece are required)."
+        ) from error
 
     phonetic_enabled = phonetic_enabled_raw.lower() in {"1", "true", "yes", "on"}
     use_english_respeller = (

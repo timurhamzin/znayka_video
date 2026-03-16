@@ -14,6 +14,12 @@ winget install OpenJS.NodeJS
 uv sync
 ```
 
+If you already had an older environment, refresh it:
+
+```bash
+uv sync --reinstall
+```
+
 ## Download NLTK Data (Required for English phonetic respelling)
 
 Run once after installation:
@@ -45,12 +51,14 @@ TRANSCRIBE_ENABLE_PHONETIC=true
 TRANSCRIBE_PHONETIC_LANGUAGE=en
 TRANSCRIBE_DUPLICATE_SRT_ENCODING=utf-8
 TRANSCRIBE_HF_TOKEN=your_hf_token
+TRANSCRIBE_OFFLINE_MODE=false
 TRANSCRIBE_OUTPUT_FOLDER=
 ```
 
 Notes:
 - If `TRANSCRIBE_TRANSLATION_MODEL` is empty, model is auto-selected from source/target language pair.
 - English phonetic respelling works only when source language is English. For French source, phonetic lines are skipped.
+- Keep `TRANSCRIBE_OFFLINE_MODE=false` for first run so Marian models can be downloaded.
 - Legacy vars (`VIDEO_FOLDER`, `LANGUAGE`, `DUPLICATE_SRT_ENCODING`, `HF_TOKEN`, `OUTPUT_FOLDER`) are still supported for backward compatibility.
 
 ## Run Scripts (activate `.venv` automatically)
@@ -58,8 +66,8 @@ Notes:
 ### Windows (PowerShell)
 
 ```powershell
-./run_download.ps1
-./run_transcribe.ps1
+.\run_download.ps1
+.\run_transcribe.ps1
 ```
 
 ### Linux/macOS (bash)
@@ -109,6 +117,8 @@ Pipeline:
 Managed by `uv`. Main dependencies:
 - `yt-dlp`
 - `transformers`
+- `sentencepiece`
+- `protobuf`
 - `g2p-en`
 - `torch`
 - `nltk`
