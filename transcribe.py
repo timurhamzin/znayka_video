@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import json
 import time
+from difflib import SequenceMatcher
 from pathlib import Path
 import wave
 from array import array
@@ -832,6 +833,11 @@ class VideoPipeline:
             overwrite_speech_spans: bool = False,
             single_video_name: str | None = None,
             speech_spans_only_mode: bool = False,
+            translation_only_mode: bool = False,
+            translation_input: str = "original",
+            translation_overwrite: bool = False,
+            translation_append_source: bool = True,
+            update_sidecar_from_translation: bool = False,
             speech_filter_rescue_dense_runs: bool = True,
             speech_filter_rescue_min_cues: int = 4,
             speech_filter_rescue_min_duration_sec: float = 8.0,
@@ -841,6 +847,9 @@ class VideoPipeline:
             speech_filter_rescue_tiny_max_cues: int = 3,
             speech_filter_rescue_tiny_max_duration_sec: float = 4.0,
             speech_filter_rescue_tiny_neighbor_gap_sec: float = 8.0,
+            speech_filter_rescue_bridge_runs: bool = True,
+            speech_filter_rescue_bridge_max_cues: int = 6,
+            speech_filter_rescue_bridge_max_duration_sec: float = 25.0,
             sidecar_srt_encoding: str = "utf-8",
             output_folder: Path | None = None,
     ):
@@ -854,6 +863,11 @@ class VideoPipeline:
         self.overwrite_speech_spans = overwrite_speech_spans
         self.single_video_name = single_video_name
         self.speech_spans_only_mode = speech_spans_only_mode
+        self.translation_only_mode = translation_only_mode
+        self.translation_input = translation_input
+        self.translation_overwrite = translation_overwrite
+        self.translation_append_source = translation_append_source
+        self.update_sidecar_from_translation = update_sidecar_from_translation
         self.speech_filter_rescue_dense_runs = speech_filter_rescue_dense_runs
         self.speech_filter_rescue_min_cues = speech_filter_rescue_min_cues
         self.speech_filter_rescue_min_duration_sec = speech_filter_rescue_min_duration_sec
@@ -866,6 +880,11 @@ class VideoPipeline:
         )
         self.speech_filter_rescue_tiny_neighbor_gap_sec = (
             speech_filter_rescue_tiny_neighbor_gap_sec
+        )
+        self.speech_filter_rescue_bridge_runs = speech_filter_rescue_bridge_runs
+        self.speech_filter_rescue_bridge_max_cues = speech_filter_rescue_bridge_max_cues
+        self.speech_filter_rescue_bridge_max_duration_sec = (
+            speech_filter_rescue_bridge_max_duration_sec
         )
         self.sidecar_srt_encoding = sidecar_srt_encoding
         self.output_folder = output_folder
@@ -910,8 +929,6 @@ class VideoPipeline:
         name = video.stem
         output_dir = video.parent / name
 
-        output_dir.mkdir(exist_ok=True)
-
         original_srt = output_dir / "original" / f"{name}.srt"
         stdout_path = output_dir / "stdout.txt"
         translated_windows1251 = output_dir / "translated_windows1251" / f"{name}.srt"
@@ -924,6 +941,38 @@ class VideoPipeline:
 
         if self.speech_spans_only_mode:
             logger.info("  Speech spans only mode: skipping Whisper/translation/duplicate")
+            return
+
+        output_dir.mkdir(exist_ok=True)
+
+        if self.translation_only_mode:
+            source_srt = self._resolve_translation_source_srt(video, output_dir)
+            if source_srt is None:
+                logger.warning("  Translation-only mode: source SRT not found, skipping")
+                return
+
+            translated_windows1251 = output_dir / "translated_windows1251" / f"{name}.srt"
+            translated_utf8 = output_dir / "translated_utf8" / f"{name}.srt"
+            self._build_translations(
+                source_srt=source_srt,
+                translated_utf8=translated_utf8,
+                translated_windows1251=translated_windows1251,
+                force=self.translation_overwrite,
+            )
+
+            if self.update_sidecar_from_translation and (
+                    self.translation_overwrite or not duplicate_path.exists()
+            ):
+                self._duplicate(video, translated_utf8)
+                logger.info(
+                    "  Created duplicate: %s (encoding: %s)",
+                    duplicate_path,
+                    self.sidecar_srt_encoding,
+                )
+            elif self.update_sidecar_from_translation:
+                logger.info("  Duplicate already exists, skipping")
+
+            logger.info("  Done (translation-only mode)!")
             return
 
         transcription_exists = original_srt.exists() and stdout_path.exists()
@@ -951,36 +1000,30 @@ class VideoPipeline:
             )
             logger.info("  Created SRT: %s", srt_path)
 
-        if translation_exists:
+        if translation_exists and not self.translation_overwrite:
             logger.info("  Translation already exists, skipping")
         else:
             if self.translator is None:
                 logger.info("  Translator is disabled, skipping translation")
                 return
 
-            self.translator.translate_file(srt_path, translated_utf8, append=True)
-
-            translated_content = translated_utf8.read_text(encoding="utf-8")
-            translated_windows1251.parent.mkdir(parents=True, exist_ok=True)
-            translated_windows1251.write_text(
-                translated_content,
-                encoding="windows-1251",
-                errors="replace",
+            self._build_translations(
+                source_srt=srt_path,
+                translated_utf8=translated_utf8,
+                translated_windows1251=translated_windows1251,
+                force=self.translation_overwrite,
             )
 
-            logger.info("  Created translated files:")
-            logger.info("    %s", translated_windows1251)
-            logger.info("    %s", translated_utf8)
-
-        if duplicate_exists:
+        if duplicate_exists and not self.translation_overwrite:
             logger.info("  Duplicate already exists, skipping")
         else:
-            self._duplicate(video, translated_utf8)
-            logger.info(
-                "  Created duplicate: %s (encoding: %s)",
-                duplicate_path,
-                self.sidecar_srt_encoding,
-            )
+            if self.update_sidecar_from_translation:
+                self._duplicate(video, translated_utf8)
+                logger.info(
+                    "  Created duplicate: %s (encoding: %s)",
+                    duplicate_path,
+                    self.sidecar_srt_encoding,
+                )
 
         logger.info("  Done!")
 
@@ -1040,6 +1083,8 @@ class VideoPipeline:
             self._rescue_dense_middle_runs(blocks, keep_flags)
         if self.speech_filter_rescue_tiny_runs:
             self._rescue_tiny_middle_runs(blocks, keep_flags)
+        if self.speech_filter_rescue_bridge_runs:
+            self._rescue_bridge_middle_runs(blocks, keep_flags)
 
         filtered = [block for block, keep in zip(blocks, keep_flags, strict=False) if keep]
 
@@ -1145,6 +1190,47 @@ class VideoPipeline:
 
             index += 1
 
+    def _rescue_bridge_middle_runs(
+            self,
+            blocks: list[SRTBlock],
+            keep_flags: list[bool],
+    ) -> None:
+        index = 0
+        while index < len(blocks):
+            if keep_flags[index]:
+                index += 1
+                continue
+
+            run_start = index
+            while index + 1 < len(blocks) and not keep_flags[index + 1]:
+                index += 1
+            run_end = index
+
+            has_prev_kept = run_start > 0 and keep_flags[run_start - 1]
+            has_next_kept = run_end + 1 < len(blocks) and keep_flags[run_end + 1]
+            if not (has_prev_kept and has_next_kept):
+                index += 1
+                continue
+
+            run_cues = run_end - run_start + 1
+            run_duration = blocks[run_end].end - blocks[run_start].start
+
+            should_rescue = (
+                run_cues <= self.speech_filter_rescue_bridge_max_cues
+                and run_duration <= self.speech_filter_rescue_bridge_max_duration_sec
+            )
+            if should_rescue:
+                for i in range(run_start, run_end + 1):
+                    keep_flags[i] = True
+                logger.info(
+                    "  Rescued bridge subtitle run in middle: %.3fs..%.3fs (%d cues)",
+                    blocks[run_start].start,
+                    blocks[run_end].end,
+                    run_cues,
+                )
+
+            index += 1
+
     def _move_to_output_folder(self, video: Path, output_dir: Path) -> None:
         video_name = video.stem
         dest_dir = self.output_folder / video_name
@@ -1166,6 +1252,101 @@ class VideoPipeline:
                 output_dir.rmdir()
 
             logger.info("  Moved output directory to: %s", dest_dir)
+
+    def _build_translations(
+            self,
+            source_srt: Path,
+            translated_utf8: Path,
+            translated_windows1251: Path,
+            force: bool = False,
+    ) -> None:
+        if self.translator is None:
+            return
+
+        if (
+                not force
+                and translated_utf8.exists()
+                and translated_windows1251.exists()
+        ):
+            logger.info("  Translation already exists, skipping")
+            return
+
+        self.translator.translate_file(
+            source_srt,
+            translated_utf8,
+            append=self.translation_append_source,
+        )
+
+        translated_content = translated_utf8.read_text(encoding="utf-8")
+        translated_windows1251.parent.mkdir(parents=True, exist_ok=True)
+        translated_windows1251.write_text(
+            translated_content,
+            encoding="windows-1251",
+            errors="replace",
+        )
+
+        logger.info("  Created translated files:")
+        logger.info("    %s", translated_windows1251)
+        logger.info("    %s", translated_utf8)
+
+    def _resolve_translation_source_srt(self, video: Path, output_dir: Path) -> Path | None:
+        if self.translation_input == "sidecar":
+            source = video.with_suffix(".srt")
+            if source.exists():
+                normalized_original = self._copy_sidecar_to_original_folder(
+                    video,
+                    output_dir,
+                    source,
+                )
+                logger.info(
+                    "  Translation source: sidecar SRT (%s) via normalized original (%s)",
+                    source.name,
+                    normalized_original.name,
+                )
+                return normalized_original
+            return None
+
+        source = output_dir / "original" / f"{video.stem}.srt"
+        if source.exists():
+            logger.info("  Translation source: original Whisper SRT (%s)", source.name)
+            return source
+        return None
+
+    def _copy_sidecar_to_original_folder(
+            self,
+            video: Path,
+            output_dir: Path,
+            sidecar_srt: Path,
+    ) -> Path:
+        original_dir = output_dir / "original"
+        original_dir.mkdir(parents=True, exist_ok=True)
+        original_srt = original_dir / f"{video.stem}.srt"
+        content, _ = _read_text_with_fallbacks(sidecar_srt, self.sidecar_srt_encoding)
+        blocks = _parse_srt(content)
+        deduped_blocks = []
+        for block in blocks:
+            deduped_lines: list[str] = []
+            for line in block.lines:
+                if not deduped_lines or deduped_lines[-1] != line:
+                    if deduped_lines:
+                        prev = self._normalize_line_for_compare(deduped_lines[-1])
+                        current = self._normalize_line_for_compare(line)
+                        similarity = SequenceMatcher(None, prev, current).ratio()
+                        if similarity >= 0.55:
+                            continue
+                    deduped_lines.append(line)
+
+            deduped_blocks.append(
+                SRTBlock(start=block.start, end=block.end, lines=deduped_lines)
+            )
+
+        original_srt.write_text(_serialize_srt(deduped_blocks), encoding="utf-8")
+        return original_srt
+
+    @staticmethod
+    def _normalize_line_for_compare(line: str) -> str:
+        lowered = line.lower()
+        return re.sub(r"[^a-z0-9]+", "", lowered)
 
 
 def main() -> None:
@@ -1205,6 +1386,26 @@ def main() -> None:
     )
     speech_spans_only_mode_raw = _first_env(
         "TRANSCRIBE_SPEECH_SPANS_ONLY_MODE",
+        default="false",
+    )
+    translation_only_mode_raw = _first_env(
+        "TRANSCRIBE_TRANSLATION_ONLY_MODE",
+        default="false",
+    )
+    translation_input_raw = _first_env(
+        "TRANSCRIBE_TRANSLATION_INPUT",
+        default="original",
+    )
+    translation_overwrite_raw = _first_env(
+        "TRANSCRIBE_TRANSLATION_OVERWRITE",
+        default="false",
+    )
+    translation_append_source_raw = _first_env(
+        "TRANSCRIBE_TRANSLATION_APPEND_SOURCE",
+        default="true",
+    )
+    update_sidecar_from_translation_raw = _first_env(
+        "TRANSCRIBE_UPDATE_SIDECAR_FROM_TRANSLATION",
         default="false",
     )
     speech_spans_margin_sec_raw = _first_env(
@@ -1263,6 +1464,18 @@ def main() -> None:
         "TRANSCRIBE_SPEECH_FILTER_RESCUE_TINY_NEIGHBOR_GAP_SEC",
         default="8",
     )
+    speech_filter_rescue_bridge_runs_raw = _first_env(
+        "TRANSCRIBE_SPEECH_FILTER_RESCUE_BRIDGE_RUNS",
+        default="true",
+    )
+    speech_filter_rescue_bridge_max_cues_raw = _first_env(
+        "TRANSCRIBE_SPEECH_FILTER_RESCUE_BRIDGE_MAX_CUES",
+        default="6",
+    )
+    speech_filter_rescue_bridge_max_duration_sec_raw = _first_env(
+        "TRANSCRIBE_SPEECH_FILTER_RESCUE_BRIDGE_MAX_DURATION_SEC",
+        default="25",
+    )
     single_video_name = _first_env("TRANSCRIBE_SINGLE_VIDEO", default=None)
 
     whisper_language = _first_env(
@@ -1303,6 +1516,11 @@ def main() -> None:
     speech_spans_use_for_whisper = _parse_bool(speech_spans_use_for_whisper_raw)
     speech_spans_filter_sidecar = _parse_bool(speech_spans_filter_sidecar_raw)
     speech_spans_only_mode = _parse_bool(speech_spans_only_mode_raw)
+    translation_only_mode = _parse_bool(translation_only_mode_raw)
+    translation_input = translation_input_raw.lower().strip()
+    translation_overwrite = _parse_bool(translation_overwrite_raw)
+    translation_append_source = _parse_bool(translation_append_source_raw)
+    update_sidecar_from_translation = _parse_bool(update_sidecar_from_translation_raw)
     speech_spans_margin_sec = float(speech_spans_margin_sec_raw)
     speech_vad_threshold = float(speech_vad_threshold_raw)
     speech_min_duration_sec = float(speech_min_duration_raw)
@@ -1320,9 +1538,20 @@ def main() -> None:
     speech_filter_rescue_tiny_neighbor_gap_sec = float(
         speech_filter_rescue_tiny_neighbor_gap_sec_raw
     )
+    speech_filter_rescue_bridge_runs = _parse_bool(speech_filter_rescue_bridge_runs_raw)
+    speech_filter_rescue_bridge_max_cues = int(speech_filter_rescue_bridge_max_cues_raw)
+    speech_filter_rescue_bridge_max_duration_sec = float(
+        speech_filter_rescue_bridge_max_duration_sec_raw
+    )
 
     if speech_spans_only_mode:
         output_folder = None
+    if translation_only_mode:
+        output_folder = None
+    if translation_input not in {"original", "sidecar"}:
+        raise RuntimeError(
+            "TRANSCRIBE_TRANSLATION_INPUT must be either 'original' or 'sidecar'."
+        )
 
     offline_mode = offline_mode_raw.lower() in {"1", "true", "yes", "on"}
     if offline_mode:
@@ -1388,6 +1617,11 @@ def main() -> None:
         overwrite_speech_spans=speech_spans_overwrite,
         single_video_name=single_video_name,
         speech_spans_only_mode=speech_spans_only_mode,
+        translation_only_mode=translation_only_mode,
+        translation_input=translation_input,
+        translation_overwrite=translation_overwrite,
+        translation_append_source=translation_append_source,
+        update_sidecar_from_translation=update_sidecar_from_translation,
         speech_filter_rescue_dense_runs=speech_filter_rescue_dense_runs,
         speech_filter_rescue_min_cues=speech_filter_rescue_min_cues,
         speech_filter_rescue_min_duration_sec=speech_filter_rescue_min_duration_sec,
@@ -1397,6 +1631,9 @@ def main() -> None:
         speech_filter_rescue_tiny_max_cues=speech_filter_rescue_tiny_max_cues,
         speech_filter_rescue_tiny_max_duration_sec=speech_filter_rescue_tiny_max_duration_sec,
         speech_filter_rescue_tiny_neighbor_gap_sec=speech_filter_rescue_tiny_neighbor_gap_sec,
+        speech_filter_rescue_bridge_runs=speech_filter_rescue_bridge_runs,
+        speech_filter_rescue_bridge_max_cues=speech_filter_rescue_bridge_max_cues,
+        speech_filter_rescue_bridge_max_duration_sec=speech_filter_rescue_bridge_max_duration_sec,
         sidecar_srt_encoding=sidecar_srt_encoding,
         output_folder=output_folder,
     )
