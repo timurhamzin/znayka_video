@@ -50,6 +50,27 @@ TRANSCRIBE_TRANSLATION_MODEL=
 TRANSCRIBE_ENABLE_PHONETIC=true
 TRANSCRIBE_PHONETIC_LANGUAGE=en
 TRANSCRIBE_SIDECAR_SRT_ENCODING=utf-8
+TRANSCRIBE_ENABLE_SPEECH_SPANS=true
+TRANSCRIBE_SPEECH_SPANS_DETECT_IF_MISSING=true
+TRANSCRIBE_SPEECH_SPANS_OVERWRITE=false
+TRANSCRIBE_USE_SPEECH_SPANS_FOR_WHISPER=true
+TRANSCRIBE_FILTER_SIDECAR_SRT_BY_SPEECH_SPANS=true
+TRANSCRIBE_SPEECH_SPANS_ONLY_MODE=false
+TRANSCRIBE_SPEECH_SPAN_MARGIN_SEC=0.35
+TRANSCRIBE_SPEECH_VAD_THRESHOLD=0.3
+TRANSCRIBE_SPEECH_MIN_DURATION_SEC=0.15
+TRANSCRIBE_SPEECH_MIN_SILENCE_SEC=0.2
+TRANSCRIBE_SPEECH_SPAN_FILE_SUFFIX=.speech_spans.json
+TRANSCRIBE_SPEECH_FILTER_RESCUE_DENSE_RUNS=true
+TRANSCRIBE_SPEECH_FILTER_RESCUE_MIN_CUES=4
+TRANSCRIBE_SPEECH_FILTER_RESCUE_MIN_DURATION_SEC=8
+TRANSCRIBE_SPEECH_FILTER_RESCUE_MAX_DURATION_SEC=90
+TRANSCRIBE_SPEECH_FILTER_RESCUE_MIN_DENSITY=0.08
+TRANSCRIBE_SPEECH_FILTER_RESCUE_TINY_RUNS=true
+TRANSCRIBE_SPEECH_FILTER_RESCUE_TINY_MAX_CUES=3
+TRANSCRIBE_SPEECH_FILTER_RESCUE_TINY_MAX_DURATION_SEC=4
+TRANSCRIBE_SPEECH_FILTER_RESCUE_TINY_NEIGHBOR_GAP_SEC=8
+TRANSCRIBE_SINGLE_VIDEO=
 TRANSCRIBE_HF_TOKEN=your_hf_token
 TRANSCRIBE_OFFLINE_MODE=false
 TRANSCRIBE_OUTPUT_FOLDER=
@@ -59,6 +80,13 @@ Notes:
 - If `TRANSCRIBE_TRANSLATION_MODEL` is empty, model is auto-selected from source/target language pair.
 - English phonetic respelling works only when source language is English. For French source, phonetic lines are skipped.
 - Keep `TRANSCRIBE_OFFLINE_MODE=false` for first run so Marian models can be downloaded.
+- Speech spans are detected with a local Silero VAD model.
+- Sidecar `video_name.srt` can be auto-filtered to keep only cues that overlap speech spans.
+- Dense subtitle runs in the middle of kept speech regions are rescued to avoid false VAD-hole deletions.
+- Tiny middle runs between two nearby kept regions are also rescued (for short interjections).
+- If `video_name.speech_spans.json` already exists, it is reused (unless overwrite is enabled).
+- `TRANSCRIBE_SPEECH_SPANS_ONLY_MODE=true` runs only span detection + sidecar filtering (no Whisper/translation).
+- `TRANSCRIBE_SINGLE_VIDEO` lets you test one file by exact filename (or stem) without processing the whole folder.
 - Legacy vars are still supported for backward compatibility:
   - `TRANSCRIBE_DUPLICATE_SRT_ENCODING`
   - `VIDEO_FOLDER`
@@ -128,6 +156,9 @@ Reads:
 
 Pipeline:
 - Whisper transcription (`--language` from `TRANSCRIBE_WHISPER_LANGUAGE`)
+- Optional local speech span detection (`video_name.speech_spans.json`)
+- Optional sidecar SRT filtering by speech overlaps
+- Optional span-aware Whisper transcription with absolute timeline preserved
 - MarianMT translation (`TRANSCRIBE_TRANSLATION_SOURCE_LANGUAGE` -> `TRANSCRIBE_TRANSLATION_TARGET_LANGUAGE`)
 - Optional English phonetic respelling
 - UTF-8 + Windows-1251 translated outputs
