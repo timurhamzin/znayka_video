@@ -49,7 +49,7 @@ TRANSCRIBE_TRANSLATION_TARGET_LANGUAGE=en
 TRANSCRIBE_TRANSLATION_MODEL=
 TRANSCRIBE_ENABLE_PHONETIC=true
 TRANSCRIBE_PHONETIC_LANGUAGE=en
-TRANSCRIBE_DUPLICATE_SRT_ENCODING=utf-8
+TRANSCRIBE_SIDECAR_SRT_ENCODING=utf-8
 TRANSCRIBE_HF_TOKEN=your_hf_token
 TRANSCRIBE_OFFLINE_MODE=false
 TRANSCRIBE_OUTPUT_FOLDER=
@@ -59,7 +59,29 @@ Notes:
 - If `TRANSCRIBE_TRANSLATION_MODEL` is empty, model is auto-selected from source/target language pair.
 - English phonetic respelling works only when source language is English. For French source, phonetic lines are skipped.
 - Keep `TRANSCRIBE_OFFLINE_MODE=false` for first run so Marian models can be downloaded.
-- Legacy vars (`VIDEO_FOLDER`, `LANGUAGE`, `DUPLICATE_SRT_ENCODING`, `HF_TOKEN`, `OUTPUT_FOLDER`) are still supported for backward compatibility.
+- Legacy vars are still supported for backward compatibility:
+  - `TRANSCRIBE_DUPLICATE_SRT_ENCODING`
+  - `VIDEO_FOLDER`
+  - `LANGUAGE`
+  - `DUPLICATE_SRT_ENCODING`
+  - `HF_TOKEN`
+  - `OUTPUT_FOLDER`
+
+### `subtitles_to_markdown.py` vars
+
+```env
+TRANSCRIBE_SUBTITLE_SOURCE_DIR=path/to/folder/with/srt
+TRANSCRIBE_SUBTITLE_OUTPUT_MD=path/to/output/subtitles.md
+TRANSCRIBE_SUBTITLE_GLOB=*.srt
+TRANSCRIBE_SUBTITLE_SOURCE_ENCODING=
+TRANSCRIBE_SUBTITLE_SOURCE_ENCODING_FALLBACKS=utf-8,utf-8-sig,windows-1251,cp1251
+TRANSCRIBE_SUBTITLE_OUTPUT_ENCODING=
+```
+
+Notes:
+- `TRANSCRIBE_SUBTITLE_SOURCE_ENCODING` controls how `.srt` files are read.
+- `TRANSCRIBE_SUBTITLE_SOURCE_ENCODING_FALLBACKS` is used when the primary source encoding fails (useful for mixed-encoding folders).
+- If `TRANSCRIBE_SUBTITLE_OUTPUT_ENCODING` is not set, output defaults to `TRANSCRIBE_SIDECAR_SRT_ENCODING` (and then legacy names).
 
 ## Run Scripts (activate `.venv` automatically)
 
@@ -68,14 +90,16 @@ Notes:
 ```powershell
 .\run_download.ps1
 .\run_transcribe.ps1
+.\run_subtitles_to_markdown.ps1
 ```
 
 ### Linux/macOS (bash)
 
 ```bash
-chmod +x run_download.sh run_transcribe.sh
+chmod +x run_download.sh run_transcribe.sh run_subtitles_to_markdown.sh
 ./run_download.sh
 ./run_transcribe.sh
+./run_subtitles_to_markdown.sh
 ```
 
 ## French Video -> English Translation Example
@@ -107,8 +131,19 @@ Pipeline:
 - MarianMT translation (`TRANSCRIBE_TRANSLATION_SOURCE_LANGUAGE` -> `TRANSCRIBE_TRANSLATION_TARGET_LANGUAGE`)
 - Optional English phonetic respelling
 - UTF-8 + Windows-1251 translated outputs
-- Duplicate SRT in `TRANSCRIBE_DUPLICATE_SRT_ENCODING`
+- Sidecar translated SRT in `TRANSCRIBE_SIDECAR_SRT_ENCODING`
 - Optional move to `TRANSCRIBE_OUTPUT_FOLDER`
+
+## `subtitles_to_markdown.py`
+
+Combines subtitle files from `TRANSCRIBE_SUBTITLE_SOURCE_DIR` into one Markdown file:
+- reads files recursively using `TRANSCRIBE_SUBTITLE_GLOB` (default `*.srt`)
+- reads source files in `TRANSCRIBE_SUBTITLE_SOURCE_ENCODING`
+- retries with `TRANSCRIBE_SUBTITLE_SOURCE_ENCODING_FALLBACKS` when needed
+- removes index/timecode lines
+- keeps an empty line between subtitle blocks
+- writes output to `TRANSCRIBE_SUBTITLE_OUTPUT_MD`
+- uses `TRANSCRIBE_SUBTITLE_OUTPUT_ENCODING` (or defaults to sidecar SRT encoding)
 
 > NOTE: Use responsibly and only with content you are allowed to process.
 

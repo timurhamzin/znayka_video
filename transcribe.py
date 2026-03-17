@@ -4,7 +4,7 @@ Transcribe video files using Whisper and process SRT files with translation.
 Directory structure for each video:
 video_folder/
 ├── video_file.mp4
-├── video_file.srt (translated, in DUPLICATE_SRT_ENCODING)
+├── video_file.srt (translated, in sidecar SRT encoding)
 └── video_file_name/
     ├── original/
     │   └── video_file.srt (original transcription, utf-8)
@@ -408,13 +408,13 @@ class VideoPipeline:
             video_folder: Path,
             translator: SRTTranslator,
             transcriber: WhisperTranscriber,
-            duplicate_encoding: str = "utf-8",
+            sidecar_srt_encoding: str = "utf-8",
             output_folder: Path | None = None,
     ):
         self.video_folder = video_folder
         self.translator = translator
         self.transcriber = transcriber
-        self.duplicate_encoding = duplicate_encoding
+        self.sidecar_srt_encoding = sidecar_srt_encoding
         self.output_folder = output_folder
 
     def run(self) -> None:
@@ -503,7 +503,7 @@ class VideoPipeline:
             logger.info(
                 "  Created duplicate: %s (encoding: %s)",
                 duplicate_path,
-                self.duplicate_encoding,
+                self.sidecar_srt_encoding,
             )
 
         logger.info("  Done!")
@@ -514,7 +514,11 @@ class VideoPipeline:
     def _duplicate(self, video: Path, srt: Path) -> None:
         content = srt.read_text(encoding="utf-8")
         duplicate = video.parent / f"{video.stem}.srt"
-        duplicate.write_text(content, encoding=self.duplicate_encoding, errors='replace')
+        duplicate.write_text(
+            content,
+            encoding=self.sidecar_srt_encoding,
+            errors="replace",
+        )
 
     def _move_to_output_folder(self, video: Path, output_dir: Path) -> None:
         video_name = video.stem
@@ -548,7 +552,8 @@ def main() -> None:
 
     video_folder = Path(video_folder_raw)
 
-    duplicate_encoding = _first_env(
+    sidecar_srt_encoding = _first_env(
+        "TRANSCRIBE_SIDECAR_SRT_ENCODING",
         "TRANSCRIBE_DUPLICATE_SRT_ENCODING",
         "DUPLICATE_SRT_ENCODING",
         default="utf-8",
@@ -630,7 +635,7 @@ def main() -> None:
         video_folder=video_folder,
         translator=srt_translator,
         transcriber=transcriber,
-        duplicate_encoding=duplicate_encoding,
+        sidecar_srt_encoding=sidecar_srt_encoding,
         output_folder=output_folder,
     )
 

@@ -4,10 +4,6 @@
 *.avi
 *.mov
 
-# Subtitle files
-*.srt
-*.vtt
-
 # Log files
 *.log
 *.stdout
