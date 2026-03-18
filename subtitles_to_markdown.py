@@ -74,7 +74,8 @@ def _extract_subtitle_blocks(content: str) -> list[str]:
         ]
 
         if text_lines:
-            cleaned_blocks.append('\n'.join(text_lines))
+            # Use Markdown hard line breaks to keep multiline subtitle cues visible.
+            cleaned_blocks.append('  \n'.join(text_lines))
 
     return cleaned_blocks
 

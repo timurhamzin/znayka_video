@@ -2,7 +2,7 @@
     [string]$VideoFolder = "",
     [string]$SingleVideo = "",
     # One of: original, translated_utf8, translated_windows1251
-    [string]$Variant = "original"
+    [string]$Variant = "translated_utf8"
 )
 
 # When to use:

@@ -127,6 +127,39 @@ class MergeEncodingTest(unittest.TestCase):
             self.assertIn('Episode 02 text', merged)
             self.assertIn('Episode 03 text', merged)
 
+    def test_multiline_cue_keeps_visible_markdown_line_break(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir) / 'Bebebears - TV cartoons'
+            episode = root / 'Bebebears - Episode 04'
+            episode.mkdir(parents=True, exist_ok=True)
+
+            (episode / 'ep04.srt').write_text(
+                '\n'.join(
+                    [
+                        '1',
+                        '00:00:01,000 --> 00:00:02,000',
+                        'First line',
+                        'Second line',
+                        '',
+                    ]
+                ),
+                encoding='utf-8',
+            )
+
+            output_md = root / 'merged_srt_files.md'
+
+            report = merge_subtitles(
+                source_dir=root,
+                output_md=output_md,
+                pattern='*.srt',
+                source_encoding='utf-8',
+                output_encoding='utf-8',
+            )
+
+            self.assertEqual(report.errors, [])
+            merged = output_md.read_text(encoding='utf-8')
+            self.assertIn('First line  \nSecond line', merged)
+
 
 if __name__ == '__main__':
     unittest.main()
