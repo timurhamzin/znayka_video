@@ -838,6 +838,7 @@ class VideoPipeline:
             translation_overwrite: bool = False,
             translation_append_source: bool = True,
             update_sidecar_from_translation: bool = False,
+            enable_translation: bool = True,
             speech_filter_rescue_dense_runs: bool = True,
             speech_filter_rescue_min_cues: int = 4,
             speech_filter_rescue_min_duration_sec: float = 8.0,
@@ -868,6 +869,7 @@ class VideoPipeline:
         self.translation_overwrite = translation_overwrite
         self.translation_append_source = translation_append_source
         self.update_sidecar_from_translation = update_sidecar_from_translation
+        self.enable_translation = enable_translation
         self.speech_filter_rescue_dense_runs = speech_filter_rescue_dense_runs
         self.speech_filter_rescue_min_cues = speech_filter_rescue_min_cues
         self.speech_filter_rescue_min_duration_sec = speech_filter_rescue_min_duration_sec
@@ -1000,7 +1002,9 @@ class VideoPipeline:
             )
             logger.info("  Created SRT: %s", srt_path)
 
-        if translation_exists and not self.translation_overwrite:
+        if not self.enable_translation:
+            logger.info("  Translation disabled by configuration, skipping")
+        elif translation_exists and not self.translation_overwrite:
             logger.info("  Translation already exists, skipping")
         else:
             if self.translator is None:
@@ -1404,6 +1408,10 @@ def main() -> None:
         "TRANSCRIBE_TRANSLATION_APPEND_SOURCE",
         default="true",
     )
+    enable_translation_raw = _first_env(
+        "TRANSCRIBE_ENABLE_TRANSLATION",
+        default="true",
+    )
     update_sidecar_from_translation_raw = _first_env(
         "TRANSCRIBE_UPDATE_SIDECAR_FROM_TRANSLATION",
         default="false",
@@ -1521,6 +1529,7 @@ def main() -> None:
     translation_overwrite = _parse_bool(translation_overwrite_raw)
     translation_append_source = _parse_bool(translation_append_source_raw)
     update_sidecar_from_translation = _parse_bool(update_sidecar_from_translation_raw)
+    enable_translation = _parse_bool(enable_translation_raw)
     speech_spans_margin_sec = float(speech_spans_margin_sec_raw)
     speech_vad_threshold = float(speech_vad_threshold_raw)
     speech_min_duration_sec = float(speech_min_duration_raw)
@@ -1622,6 +1631,7 @@ def main() -> None:
         translation_overwrite=translation_overwrite,
         translation_append_source=translation_append_source,
         update_sidecar_from_translation=update_sidecar_from_translation,
+        enable_translation=enable_translation,
         speech_filter_rescue_dense_runs=speech_filter_rescue_dense_runs,
         speech_filter_rescue_min_cues=speech_filter_rescue_min_cues,
         speech_filter_rescue_min_duration_sec=speech_filter_rescue_min_duration_sec,
