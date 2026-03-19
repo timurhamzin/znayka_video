@@ -1,5 +1,10 @@
 ﻿# Setup
 
+## Integration Roadmap
+
+Service integration plan and checklist:
+- [`docs/integration-plan.md`](docs/integration-plan.md)
+
 ## Prerequisites
 
 1. Install Python dependencies:

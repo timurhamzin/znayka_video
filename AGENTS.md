@@ -36,3 +36,8 @@
 - Install/update env with `uv sync`.
 - If runtime errors mention missing tokenizer/model deps, run `uv sync --reinstall`.
 - `transcribe.py` requires `sentencepiece` and `protobuf` for Marian tokenizer/model loading.
+
+## Integration Plan
+- Follow and update the checklist in `docs/integration-plan.md`.
+- Keep integration implementation in `integration_service/` as a separate project
+  until monorepo migration.
