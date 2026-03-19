@@ -22,49 +22,69 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# STEP-FLAG PROFILES (valid Python constants; only step flags differ)
+# Copy selected values into `.env` as TRANSCRIBE_RUN_* flags.
+# ---------------------------------------------------------------------------
+# Scenario: force-create speech spans only.
+# Typical time: ~0.05-0.5 min/video.
+PROFILE_FORCE_CREATE_SPANS = {
+    'TRANSCRIBE_RUN_GENERATE_SPANS': True,
+    'TRANSCRIBE_RUN_FILTER_SIDECARS': False,
+    'TRANSCRIBE_RUN_TRANSCRIPTION': False,
+    'TRANSCRIBE_RUN_TRANSLATION': False,
+    'TRANSCRIBE_RUN_BAKE_SUBTITLES': False,
+    'TRANSCRIBE_RUN_SIDECAR_REPLACE': False,
+    'TRANSCRIBE_RUN_MERGE': False,
+}
 
-# ---------------------------------------------------------------------------
-# STEP-FLAG PROFILES (copy one block into .env if needed; only flags differ)
-# ---------------------------------------------------------------------------
-# PROFILE_FORCE_CREATE_SPANS
-# TRANSCRIBE_RUN_GENERATE_SPANS=true
-# TRANSCRIBE_RUN_FILTER_SIDECARS=false
-# TRANSCRIBE_RUN_TRANSCRIPTION=false
-# TRANSCRIBE_RUN_TRANSLATION=false
-# TRANSCRIBE_RUN_SIDECAR_REPLACE=false
-# TRANSCRIBE_RUN_MERGE=false
-#
-# PROFILE_FORCE_FILTER_SIDECARS
-# TRANSCRIBE_RUN_GENERATE_SPANS=true
-# TRANSCRIBE_RUN_FILTER_SIDECARS=true
-# TRANSCRIBE_RUN_TRANSCRIPTION=false
-# TRANSCRIBE_RUN_TRANSLATION=false
-# TRANSCRIBE_RUN_SIDECAR_REPLACE=false
-# TRANSCRIBE_RUN_MERGE=false
-#
-# PROFILE_FORCE_RERUN_TRANSLATION_FROM_SIDECAR
-# TRANSCRIBE_RUN_GENERATE_SPANS=false
-# TRANSCRIBE_RUN_FILTER_SIDECARS=false
-# TRANSCRIBE_RUN_TRANSCRIPTION=false
-# TRANSCRIBE_RUN_TRANSLATION=true
-# TRANSCRIBE_RUN_SIDECAR_REPLACE=false
-# TRANSCRIBE_RUN_MERGE=false
-#
-# PROFILE_FORCE_RERUN_TRANSCRIBE_AND_TRANSLATE
-# TRANSCRIBE_RUN_GENERATE_SPANS=true
-# TRANSCRIBE_RUN_FILTER_SIDECARS=true
-# TRANSCRIBE_RUN_TRANSCRIPTION=true
-# TRANSCRIBE_RUN_TRANSLATION=true
-# TRANSCRIBE_RUN_SIDECAR_REPLACE=false
-# TRANSCRIBE_RUN_MERGE=false
-#
-# PROFILE_ALL_IN_ONE_WITH_MERGE
-# TRANSCRIBE_RUN_GENERATE_SPANS=true
-# TRANSCRIBE_RUN_FILTER_SIDECARS=true
-# TRANSCRIBE_RUN_TRANSCRIPTION=true
-# TRANSCRIBE_RUN_TRANSLATION=true
-# TRANSCRIBE_RUN_SIDECAR_REPLACE=false
-# TRANSCRIBE_RUN_MERGE=true
+# Scenario: create spans and filter sidecars.
+# Typical time: ~0.1-0.8 min/video.
+PROFILE_FORCE_FILTER_SIDECARS = {
+    'TRANSCRIBE_RUN_GENERATE_SPANS': True,
+    'TRANSCRIBE_RUN_FILTER_SIDECARS': True,
+    'TRANSCRIBE_RUN_TRANSCRIPTION': False,
+    'TRANSCRIBE_RUN_TRANSLATION': False,
+    'TRANSCRIBE_RUN_BAKE_SUBTITLES': False,
+    'TRANSCRIBE_RUN_SIDECAR_REPLACE': False,
+    'TRANSCRIBE_RUN_MERGE': False,
+}
+
+# Scenario: rerun translation only from sidecar.
+# Typical time: ~0.1-1.0 min/video.
+PROFILE_FORCE_RERUN_TRANSLATION_FROM_SIDECAR = {
+    'TRANSCRIBE_RUN_GENERATE_SPANS': False,
+    'TRANSCRIBE_RUN_FILTER_SIDECARS': False,
+    'TRANSCRIBE_RUN_TRANSCRIPTION': False,
+    'TRANSCRIBE_RUN_TRANSLATION': True,
+    'TRANSCRIBE_RUN_BAKE_SUBTITLES': False,
+    'TRANSCRIBE_RUN_SIDECAR_REPLACE': False,
+    'TRANSCRIBE_RUN_MERGE': False,
+}
+
+# Scenario: full rerun (spans + filter + transcribe + translate).
+# Typical time: ~1-10+ min/video (Whisper-heavy).
+PROFILE_FORCE_RERUN_TRANSCRIBE_AND_TRANSLATE = {
+    'TRANSCRIBE_RUN_GENERATE_SPANS': True,
+    'TRANSCRIBE_RUN_FILTER_SIDECARS': True,
+    'TRANSCRIBE_RUN_TRANSCRIPTION': True,
+    'TRANSCRIBE_RUN_TRANSLATION': True,
+    'TRANSCRIBE_RUN_BAKE_SUBTITLES': False,
+    'TRANSCRIBE_RUN_SIDECAR_REPLACE': False,
+    'TRANSCRIBE_RUN_MERGE': False,
+}
+
+# Scenario: end-to-end result with bake and merge.
+# Typical time: ~2-12+ min/video.
+PROFILE_ALL_IN_ONE_WITH_MERGE = {
+    'TRANSCRIBE_RUN_GENERATE_SPANS': True,
+    'TRANSCRIBE_RUN_FILTER_SIDECARS': True,
+    'TRANSCRIBE_RUN_TRANSCRIPTION': True,
+    'TRANSCRIBE_RUN_TRANSLATION': True,
+    'TRANSCRIBE_RUN_BAKE_SUBTITLES': True,
+    'TRANSCRIBE_RUN_SIDECAR_REPLACE': False,
+    'TRANSCRIBE_RUN_MERGE': True,
+}
 # ---------------------------------------------------------------------------
 
 MEMORY_FILE = Path(".master_pipeline_memory.json")
@@ -155,9 +175,9 @@ def _run_transcribe_step(name: str, env_overrides: dict[str, str]) -> None:
 
 
 def _run_merge_step(
-    video_folder: Path,
-    sidecar_encoding: str,
-    output_md: Path,
+        video_folder: Path,
+        sidecar_encoding: str,
+        output_md: Path,
 ) -> None:
     logger.info('==> Step: merge subtitles')
     variant = _variant_for_encoding(sidecar_encoding)
@@ -205,17 +225,67 @@ def main() -> int:
         )
     )
 
-    run_generate_spans = _to_bool(_first_env("TRANSCRIBE_RUN_GENERATE_SPANS", default="true"), True)
-    run_filter_sidecars = _to_bool(_first_env("TRANSCRIBE_RUN_FILTER_SIDECARS", default="true"), True)
-    run_transcription = _to_bool(_first_env("TRANSCRIBE_RUN_TRANSCRIPTION", default="false"), False)
-    run_translation = _to_bool(_first_env("TRANSCRIBE_RUN_TRANSLATION", default="false"), False)
-    run_sidecar_replace = _to_bool(_first_env("TRANSCRIBE_RUN_SIDECAR_REPLACE", default="false"), False)
-    run_merge = _to_bool(_first_env("TRANSCRIBE_RUN_MERGE", default="true"), True)
+    run_generate_spans = _to_bool(
+        _first_env("TRANSCRIBE_RUN_GENERATE_SPANS", default="false"),
+        False,
+    )
+    run_filter_sidecars = _to_bool(
+        _first_env("TRANSCRIBE_RUN_FILTER_SIDECARS", default="false"),
+        False,
+    )
+    run_transcription = _to_bool(
+        _first_env("TRANSCRIBE_RUN_TRANSCRIPTION", default="false"),
+        False,
+    )
+    run_translation = _to_bool(
+        _first_env("TRANSCRIBE_RUN_TRANSLATION", default="false"),
+        False,
+    )
+    run_bake_subtitles = _to_bool(
+        _first_env("TRANSCRIBE_RUN_BAKE_SUBTITLES", default="false"),
+        False,
+    )
+    run_sidecar_replace = _to_bool(
+        _first_env("TRANSCRIBE_RUN_SIDECAR_REPLACE", default="false"),
+        False,
+    )
+    run_merge = _to_bool(_first_env("TRANSCRIBE_RUN_MERGE", default="false"), False)
 
     force_spans = _to_bool(_first_env("TRANSCRIBE_FORCE_SPANS", default="true"), True)
     force_transcription = _to_bool(_first_env("TRANSCRIBE_FORCE_TRANSCRIPTION", default="false"), False)
     force_translation = _to_bool(_first_env("TRANSCRIBE_FORCE_TRANSLATION", default="true"), True)
+    force_bake_subtitles = _to_bool(
+        _first_env("TRANSCRIBE_FORCE_BAKE_SUBTITLES", default="false"),
+        False,
+    )
     append_source = _to_bool(_first_env("TRANSCRIBE_TRANSLATION_APPEND_SOURCE", default="true"), True)
+
+    logger.info(
+        'Effective step flags: generate_spans=%s, filter_sidecars=%s, '
+        'transcription=%s, translation=%s, bake_subtitles=%s, '
+        'sidecar_replace=%s, merge=%s',
+        run_generate_spans,
+        run_filter_sidecars,
+        run_transcription,
+        run_translation,
+        run_bake_subtitles,
+        run_sidecar_replace,
+        run_merge,
+    )
+
+    if not any(
+        [
+            run_generate_spans,
+            run_filter_sidecars,
+            run_transcription,
+            run_translation,
+            run_bake_subtitles,
+            run_sidecar_replace,
+            run_merge,
+        ]
+    ):
+        logger.warning('No steps enabled. Set TRANSCRIBE_RUN_* flags in .env.')
+        return 0
 
     memory = _load_memory()
 
@@ -240,9 +310,9 @@ def main() -> int:
         ]
         if missing_spans and not run_generate_spans:
             if _ask_with_memory(
-                memory,
-                "missing_spans_for_filter",
-                "Missing speech spans for filter step. Run spans generation first?",
+                    memory,
+                    "missing_spans_for_filter",
+                    "Missing speech spans for filter step. Run spans generation first?",
             ):
                 run_generate_spans = True
             else:
@@ -257,13 +327,30 @@ def main() -> int:
         ]
         if missing_variant and not run_translation:
             if _ask_with_memory(
-                memory,
-                "missing_variant_for_replace",
-                f'Missing "{variant}" subtitles for sidecar replace. Run translation first?',
+                    memory,
+                    "missing_variant_for_replace",
+                    f'Missing "{variant}" subtitles for sidecar replace. Run translation first?',
             ):
                 run_translation = True
             else:
                 run_sidecar_replace = False
+
+    if run_bake_subtitles:
+        variant = _variant_for_encoding(sidecar_encoding or "utf-8")
+        missing_variant = [
+            video
+            for video in videos
+            if not (video.parent / video.stem / variant / f"{video.stem}.srt").exists()
+        ]
+        if missing_variant and not run_translation:
+            if _ask_with_memory(
+                    memory,
+                    "missing_variant_for_bake",
+                    f'Missing "{variant}" subtitles for bake step. Run translation first?',
+            ):
+                run_translation = True
+            else:
+                run_bake_subtitles = False
 
     if run_generate_spans:
         _run_transcribe_step(
@@ -323,9 +410,9 @@ def main() -> int:
         missing_sidecars = [video for video in videos if not video.with_suffix(".srt").exists()]
         if missing_sidecars:
             if not _ask_with_memory(
-                memory,
-                "missing_sidecars_for_translation",
-                "Some sidecar SRT files are missing. Continue translation step anyway?",
+                    memory,
+                    "missing_sidecars_for_translation",
+                    "Some sidecar SRT files are missing. Continue translation step anyway?",
             ):
                 run_translation = False
 
@@ -342,9 +429,25 @@ def main() -> int:
             },
         )
 
+    if run_bake_subtitles:
+        _run_transcribe_step(
+            "bake target subtitles into video",
+            {
+                **common_env,
+                "TRANSCRIBE_ENABLE_SPEECH_SPANS": "false",
+                "TRANSCRIBE_SPEECH_SPANS_ONLY_MODE": "false",
+                "TRANSCRIBE_TRANSLATION_ONLY_MODE": "false",
+                "TRANSCRIBE_ENABLE_TRANSLATION": "false",
+                "TRANSCRIBE_ENABLE_BAKED_SUBTITLES": "true",
+                "TRANSCRIBE_BAKE_SUBTITLES_ONLY_MODE": "true",
+                "TRANSCRIBE_BAKE_SUBTITLES_OVERWRITE": "true" if force_bake_subtitles else "false",
+            },
+        )
+
     if run_merge:
         # Merge result should reflect processing outputs, not sidecar replace result.
-        _run_merge_step(video_folder=video_folder, sidecar_encoding=sidecar_encoding or "utf-8", output_md=merge_output_md)
+        _run_merge_step(
+            video_folder=video_folder, sidecar_encoding=sidecar_encoding or "utf-8", output_md=merge_output_md)
 
     if run_sidecar_replace:
         logger.info('==> Step: sidecar replace')

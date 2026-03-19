@@ -45,12 +45,13 @@ TRANSCRIBE_OFFLINE_MODE=false
 Master step flags (`main.py`):
 
 ```env
-TRANSCRIBE_RUN_GENERATE_SPANS=true
-TRANSCRIBE_RUN_FILTER_SIDECARS=true
+TRANSCRIBE_RUN_GENERATE_SPANS=false
+TRANSCRIBE_RUN_FILTER_SIDECARS=false
 TRANSCRIBE_RUN_TRANSCRIPTION=false
 TRANSCRIBE_RUN_TRANSLATION=false
+TRANSCRIBE_RUN_BAKE_SUBTITLES=false
 TRANSCRIBE_RUN_SIDECAR_REPLACE=false
-TRANSCRIBE_RUN_MERGE=true
+TRANSCRIBE_RUN_MERGE=false
 ```
 
 Force flags:
@@ -59,11 +60,13 @@ Force flags:
 TRANSCRIBE_FORCE_SPANS=true
 TRANSCRIBE_FORCE_TRANSCRIPTION=false
 TRANSCRIBE_FORCE_TRANSLATION=true
+TRANSCRIBE_FORCE_BAKE_SUBTITLES=false
 ```
 
 Notes:
 - Translation is independent from transcription.
 - `TRANSCRIBE_RUN_TRANSLATION=true` runs translation from sidecar (`video_name.srt`) via `TRANSCRIBE_TRANSLATION_INPUT=sidecar`.
+- `TRANSCRIBE_RUN_BAKE_SUBTITLES=true` burns target subtitles into video (hardcoded in frame).
 - Sidecar replacement variant is derived from `TRANSCRIBE_SIDECAR_SRT_ENCODING`:
   - `utf-8` -> `translated_utf8`
   - `windows-1251`/`cp1251` -> `translated_windows1251`
@@ -107,6 +110,7 @@ Per video:
 - `Video Name/original/Video Name.srt`
 - `Video Name/translated_utf8/Video Name.srt`
 - `Video Name/translated_windows1251/Video Name.srt`
+- `Video Name/baked/Video Name.baked.mp4`
 
 Merge output:
 - `TRANSCRIBE_SUBTITLE_OUTPUT_MD` (default: `<video_folder>/merged_srt_files.md`)

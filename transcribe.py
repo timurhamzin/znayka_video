@@ -30,7 +30,6 @@ from difflib import SequenceMatcher
 from pathlib import Path
 import wave
 from array import array
-
 import nltk
 import torch
 from dotenv import load_dotenv
@@ -839,6 +838,9 @@ class VideoPipeline:
             translation_append_source: bool = True,
             update_sidecar_from_translation: bool = False,
             enable_translation: bool = True,
+            enable_baked_subtitles: bool = False,
+            bake_subtitles_only_mode: bool = False,
+            bake_subtitles_overwrite: bool = False,
             speech_filter_rescue_dense_runs: bool = True,
             speech_filter_rescue_min_cues: int = 4,
             speech_filter_rescue_min_duration_sec: float = 8.0,
@@ -870,6 +872,9 @@ class VideoPipeline:
         self.translation_append_source = translation_append_source
         self.update_sidecar_from_translation = update_sidecar_from_translation
         self.enable_translation = enable_translation
+        self.enable_baked_subtitles = enable_baked_subtitles
+        self.bake_subtitles_only_mode = bake_subtitles_only_mode
+        self.bake_subtitles_overwrite = bake_subtitles_overwrite
         self.speech_filter_rescue_dense_runs = speech_filter_rescue_dense_runs
         self.speech_filter_rescue_min_cues = speech_filter_rescue_min_cues
         self.speech_filter_rescue_min_duration_sec = speech_filter_rescue_min_duration_sec
@@ -946,6 +951,11 @@ class VideoPipeline:
             return
 
         output_dir.mkdir(exist_ok=True)
+
+        if self.bake_subtitles_only_mode:
+            self._bake_target_subtitles(video, output_dir)
+            logger.info("  Done (bake-subtitles-only mode)!")
+            return
 
         if self.translation_only_mode:
             source_srt = self._resolve_translation_source_srt(video, output_dir)
@@ -1030,6 +1040,9 @@ class VideoPipeline:
                 )
 
         logger.info("  Done!")
+
+        if self.enable_baked_subtitles:
+            self._bake_target_subtitles(video, output_dir)
 
         if self.output_folder:
             self._move_to_output_folder(video, output_dir)
@@ -1293,6 +1306,83 @@ class VideoPipeline:
         logger.info("    %s", translated_windows1251)
         logger.info("    %s", translated_utf8)
 
+    @staticmethod
+    def _subtitle_variant_for_encoding(sidecar_srt_encoding: str) -> str:
+        normalized = sidecar_srt_encoding.lower()
+        if normalized in {"windows-1251", "cp1251"}:
+            return "translated_windows1251"
+        return "translated_utf8"
+
+    @staticmethod
+    def _ffmpeg_charenc_for_encoding(sidecar_srt_encoding: str) -> str:
+        normalized = sidecar_srt_encoding.lower()
+        if normalized in {"windows-1251", "cp1251"}:
+            return "windows-1251"
+        return "UTF-8"
+
+    @staticmethod
+    def _ffmpeg_subtitles_path(path: Path) -> str:
+        posix_path = path.resolve().as_posix()
+        escaped = posix_path.replace("'", r"\'")
+        if len(escaped) >= 2 and escaped[1] == ":":
+            escaped = f"{escaped[0]}\\:{escaped[2:]}"
+        return escaped
+
+    def _bake_target_subtitles(self, video: Path, output_dir: Path) -> None:
+        variant = self._subtitle_variant_for_encoding(self.sidecar_srt_encoding)
+        target_srt = output_dir / variant / f"{video.stem}.srt"
+        if not target_srt.exists():
+            logger.warning(
+                "  Bake step skipped: missing target subtitle variant %s",
+                target_srt,
+            )
+            return
+
+        baked_dir = output_dir / "baked"
+        baked_dir.mkdir(parents=True, exist_ok=True)
+        baked_video = baked_dir / f"{video.stem}.baked.mp4"
+        if baked_video.exists() and not self.bake_subtitles_overwrite:
+            logger.info("  Baked video already exists, skipping: %s", baked_video)
+            return
+
+        ffmpeg_sub_path = self._ffmpeg_subtitles_path(target_srt)
+        ffmpeg_charenc = self._ffmpeg_charenc_for_encoding(self.sidecar_srt_encoding)
+        subtitles_filter = f"subtitles='{ffmpeg_sub_path}':charenc={ffmpeg_charenc}"
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(video),
+            "-vf",
+            subtitles_filter,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "18",
+            "-c:a",
+            "copy",
+            str(baked_video),
+        ]
+        process = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+        if process.returncode != 0:
+            raise RuntimeError(
+                "Failed to bake subtitles with ffmpeg.\n"
+                f"Video: {video}\n"
+                f"Subtitle: {target_srt}\n"
+                f"ffmpeg output:\n{process.stdout}"
+            )
+
+        logger.info("  Baked video created: %s", baked_video)
+
     def _resolve_translation_source_srt(self, video: Path, output_dir: Path) -> Path | None:
         if self.translation_input == "sidecar":
             source = video.with_suffix(".srt")
@@ -1407,6 +1497,18 @@ def main() -> None:
     translation_append_source_raw = _first_env(
         "TRANSCRIBE_TRANSLATION_APPEND_SOURCE",
         default="true",
+    )
+    enable_baked_subtitles_raw = _first_env(
+        "TRANSCRIBE_ENABLE_BAKED_SUBTITLES",
+        default="false",
+    )
+    bake_subtitles_only_mode_raw = _first_env(
+        "TRANSCRIBE_BAKE_SUBTITLES_ONLY_MODE",
+        default="false",
+    )
+    bake_subtitles_overwrite_raw = _first_env(
+        "TRANSCRIBE_BAKE_SUBTITLES_OVERWRITE",
+        default="false",
     )
     enable_translation_raw = _first_env(
         "TRANSCRIBE_ENABLE_TRANSLATION",
@@ -1528,6 +1630,9 @@ def main() -> None:
     translation_input = translation_input_raw.lower().strip()
     translation_overwrite = _parse_bool(translation_overwrite_raw)
     translation_append_source = _parse_bool(translation_append_source_raw)
+    enable_baked_subtitles = _parse_bool(enable_baked_subtitles_raw)
+    bake_subtitles_only_mode = _parse_bool(bake_subtitles_only_mode_raw)
+    bake_subtitles_overwrite = _parse_bool(bake_subtitles_overwrite_raw)
     update_sidecar_from_translation = _parse_bool(update_sidecar_from_translation_raw)
     enable_translation = _parse_bool(enable_translation_raw)
     speech_spans_margin_sec = float(speech_spans_margin_sec_raw)
@@ -1557,6 +1662,8 @@ def main() -> None:
         output_folder = None
     if translation_only_mode:
         output_folder = None
+    if bake_subtitles_only_mode:
+        output_folder = None
     if translation_input not in {"original", "sidecar"}:
         raise RuntimeError(
             "TRANSCRIBE_TRANSLATION_INPUT must be either 'original' or 'sidecar'."
@@ -1571,7 +1678,12 @@ def main() -> None:
         os.environ.pop("TRANSFORMERS_OFFLINE", None)
 
     model = None
-    if not speech_spans_only_mode:
+    should_load_translation_model = (
+        not speech_spans_only_mode
+        and not bake_subtitles_only_mode
+        and enable_translation
+    )
+    if should_load_translation_model:
         try:
             model = TranslationModel(
                 translation_model_name,
@@ -1632,6 +1744,9 @@ def main() -> None:
         translation_append_source=translation_append_source,
         update_sidecar_from_translation=update_sidecar_from_translation,
         enable_translation=enable_translation,
+        enable_baked_subtitles=enable_baked_subtitles,
+        bake_subtitles_only_mode=bake_subtitles_only_mode,
+        bake_subtitles_overwrite=bake_subtitles_overwrite,
         speech_filter_rescue_dense_runs=speech_filter_rescue_dense_runs,
         speech_filter_rescue_min_cues=speech_filter_rescue_min_cues,
         speech_filter_rescue_min_duration_sec=speech_filter_rescue_min_duration_sec,
