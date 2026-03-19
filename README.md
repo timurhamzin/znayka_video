@@ -45,6 +45,7 @@ TRANSCRIBE_OFFLINE_MODE=false
 Master step flags (`main.py`):
 
 ```env
+TRANSCRIBE_INTERACTIVE=true
 TRANSCRIBE_RUN_GENERATE_SPANS=false
 TRANSCRIBE_RUN_FILTER_SIDECARS=false
 TRANSCRIBE_RUN_TRANSCRIPTION=false
@@ -64,6 +65,10 @@ TRANSCRIBE_FORCE_BAKE_SUBTITLES=false
 ```
 
 Notes:
+- With `TRANSCRIBE_INTERACTIVE=true` and a TTY, `main.py` shows:
+  - checkbox editor for each step in execution order (UP/DOWN + SPACE + ENTER)
+  - `q` to exit without running
+  - per-feature and per-video progress bars with elapsed time, ETA, and videos left
 - Translation is independent from transcription.
 - `TRANSCRIBE_RUN_TRANSLATION=true` runs translation from sidecar (`video_name.srt`) via `TRANSCRIBE_TRANSLATION_INPUT=sidecar`.
 - `TRANSCRIBE_RUN_BAKE_SUBTITLES=true` burns target subtitles into video (hardcoded in frame).
@@ -89,16 +94,10 @@ chmod +x ./scripts/unix/run_main.sh
 ./scripts/unix/run_main.sh
 ```
 
-## Master Profiles
+## Step Selection
 
-`main.py` contains commented profile blocks at the top. They are ready-to-copy into `.env` and differ only by step flags.
-
-Profiles include:
-- force create spans
-- force filter sidecars
-- force rerun translation from sidecar
-- force rerun transcription + translation
-- all-in-one with merge
+`main.py` lets you choose only the steps you need before run.
+Execution order is fixed to match the pipeline, with baking always last.
 
 ## Output Layout
 
