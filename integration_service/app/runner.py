@@ -1,8 +1,7 @@
 from __future__ import annotations
 
+import asyncio
 import os
-import subprocess
-import sys
 
 from .config import Settings
 from .models import TranscribeJobRequest
@@ -10,7 +9,7 @@ from .models import TranscribeJobRequest
 TAIL_LIMIT = 4000
 
 
-def run_pipeline_job(
+async def run_pipeline_job(
     settings: Settings,
     request: TranscribeJobRequest,
 ) -> tuple[int, str, str]:
@@ -20,30 +19,37 @@ def run_pipeline_job(
     env = os.environ.copy()
     env.update(_build_pipeline_env(request))
 
-    command = [sys.executable, str(settings.pipeline_entrypoint)]
-    process = subprocess.run(
-        command,
+    command = [
+        'uv',
+        'run',
+        '--project',
+        str(settings.repo_root),
+        'python',
+        str(settings.pipeline_entrypoint),
+    ]
+    process = await asyncio.create_subprocess_exec(
+        *command,
         cwd=settings.repo_root,
         env=env,
-        capture_output=True,
-        text=True,
-        check=False,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
-    stdout_tail = process.stdout[-TAIL_LIMIT:]
-    stderr_tail = process.stderr[-TAIL_LIMIT:]
-    return process.returncode, stdout_tail, stderr_tail
+    stdout_bytes, stderr_bytes = await process.communicate()
+    stdout_tail = stdout_bytes.decode(errors='replace')[-TAIL_LIMIT:]
+    stderr_tail = stderr_bytes.decode(errors='replace')[-TAIL_LIMIT:]
+    return process.returncode or 0, stdout_tail, stderr_tail
 
 
 def _build_pipeline_env(request: TranscribeJobRequest) -> dict[str, str]:
     env_updates = {
         'TRANSCRIBE_INTERACTIVE': 'false',
-        'TRANSCRIBE_RUN_GENERATE_SPANS': 'false',
-        'TRANSCRIBE_RUN_FILTER_SIDECARS': 'false',
-        'TRANSCRIBE_RUN_TRANSCRIPTION': 'true',
-        'TRANSCRIBE_RUN_TRANSLATION': 'true',
-        'TRANSCRIBE_RUN_MERGE': 'false',
-        'TRANSCRIBE_RUN_SIDECAR_REPLACE': 'false',
-        'TRANSCRIBE_RUN_BAKE_SUBTITLES': 'false',
+        'TRANSCRIBE_RUN_GENERATE_SPANS': _flag(request.run_generate_spans),
+        'TRANSCRIBE_RUN_FILTER_SIDECARS': _flag(request.run_filter_sidecars),
+        'TRANSCRIBE_RUN_TRANSCRIPTION': _flag(request.run_transcription),
+        'TRANSCRIBE_RUN_TRANSLATION': _flag(request.run_translation),
+        'TRANSCRIBE_RUN_MERGE': _flag(request.run_merge),
+        'TRANSCRIBE_RUN_SIDECAR_REPLACE': _flag(request.run_sidecar_replace),
+        'TRANSCRIBE_RUN_BAKE_SUBTITLES': _flag(request.run_bake_subtitles),
     }
 
     if request.video_name:
@@ -64,3 +70,7 @@ def _build_pipeline_env(request: TranscribeJobRequest) -> dict[str, str]:
         )
 
     return env_updates
+
+
+def _flag(value: bool) -> str:
+    return 'true' if value else 'false'

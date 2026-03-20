@@ -1,53 +1,81 @@
-# Integration Service (Separate Project)
+# Integration Service (App + Worker + Redis)
 
-This service wraps the existing `znayka-video` script pipeline with a small
-job API. It is intentionally separate so it can be moved into a future
-monorepo backend later.
+This is a separate project that wraps the root `znayka-video` pipeline into a
+queue-based service.
 
-## What It Does
+Architecture:
+- `app` (FastAPI): UI + API, enqueues jobs.
+- `worker` (ARQ): runs pipeline jobs in a separate process.
+- `redis`: queue and job state store.
 
-- Accepts transcription job requests over HTTP.
-- Runs the existing root `main.py` pipeline in background.
-- Persists job status in `integration_service/data/jobs.json`.
+## Why ARQ
 
-## Run
+ARQ is an asyncio-native task manager. It supports async tasks now and keeps the
+door open for future async I/O-heavy integrations.
 
-From repository root:
+## Quick Setup (Local, PyCharm-friendly)
+
+1. Copy env file:
 
 ```powershell
 cd integration_service
+Copy-Item .env.example .env
+```
+
+2. Install dependencies:
+
+```powershell
 uv sync
-uv run uvicorn app.main:app --reload --port 8010
 ```
 
-Health check:
+3. Start Redis:
 
-```bash
-curl http://localhost:8010/health
+```powershell
+docker run --name znayka-redis -p 6379:6379 -d redis:7-alpine
 ```
 
-## API
+4. Run app from PyCharm:
+- Run script: `integration_service/main.py`
+- Working directory: repo root
 
+5. Run worker as a second process:
+- Run script: `integration_service/worker_main.py`
+- Working directory: repo root
+
+6. Open UI:
+- [http://127.0.0.1:8010](http://127.0.0.1:8010)
+
+## API and UI
+
+- `GET /` HTML form with tickboxes for pipeline steps.
 - `GET /health`
 - `POST /jobs/transcribe`
 - `GET /jobs`
 - `GET /jobs/{job_id}`
 
-Example payload:
+The form includes:
+- language fields
+- `dry_run` and `offline_mode`
+- step tickboxes (`generate_spans`, `transcription`, `translation`, etc.)
 
-```json
-{
-  "video_name": "Episode 01.mp4",
-  "whisper_language": "fr",
-  "translation_source_language": "fr",
-  "translation_target_language": "en",
-  "offline_mode": false,
-  "dry_run": true
-}
+## Docker Compose (App + Worker + Redis)
+
+From `integration_service/`:
+
+```bash
+cp .env.example .env
+docker compose up --build
 ```
+
+Services:
+- `redis` on `6379`
+- `app` on `8010`
+- `worker` consuming queued jobs
 
 ## Notes
 
-- The service sets pipeline step flags to run transcription + translation.
-- Existing root `.env` is still used as baseline.
-- Job persistence is JSON-only MVP. Production storage should be PostgreSQL.
+- Worker executes the root pipeline entrypoint (`main.py`) via:
+  - `uv run --project <repo_root> python main.py`
+- Existing root `.env` remains the baseline for pipeline behavior.
+- This project stays separate for now and can be moved into monorepo backend
+  later.

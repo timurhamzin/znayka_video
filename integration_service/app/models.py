@@ -15,6 +15,13 @@ class TranscribeJobRequest(BaseModel):
     translation_target_language: str | None = None
     offline_mode: bool | None = None
     dry_run: bool = False
+    run_generate_spans: bool = False
+    run_filter_sidecars: bool = False
+    run_transcription: bool = True
+    run_translation: bool = True
+    run_merge: bool = False
+    run_sidecar_replace: bool = False
+    run_bake_subtitles: bool = False
 
 
 class JobRecord(BaseModel):

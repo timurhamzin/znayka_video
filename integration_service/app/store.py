@@ -1,71 +1,57 @@
 from __future__ import annotations
 
-import json
-import threading
 from datetime import datetime, timezone
-from pathlib import Path
+
+from arq.connections import ArqRedis
 
 from .models import JobRecord
 
+JOBS_INDEX_KEY = 'integration:jobs:index'
+JOB_KEY_PREFIX = 'integration:jobs:'
 
-class JobStore:
-    def __init__(self, jobs_file: Path) -> None:
-        self._jobs_file = jobs_file
-        self._lock = threading.Lock()
-        self._ensure_store()
 
-    def _ensure_store(self) -> None:
-        self._jobs_file.parent.mkdir(parents=True, exist_ok=True)
-        if not self._jobs_file.exists():
-            self._jobs_file.write_text('[]', encoding='utf-8')
+class RedisJobStore:
+    def __init__(self, redis: ArqRedis) -> None:
+        self._redis = redis
 
-    def _read_jobs(self) -> list[dict]:
-        if not self._jobs_file.exists():
-            return []
-        raw = self._jobs_file.read_text(encoding='utf-8-sig')
-        if not raw.strip():
-            return []
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            return []
+    async def add_job(self, job: JobRecord) -> None:
+        job_key = _job_key(job.id)
+        payload = job.model_dump_json()
+        async with self._redis.pipeline(transaction=True) as pipeline:
+            pipeline.set(job_key, payload)
+            pipeline.lpush(JOBS_INDEX_KEY, job.id)
+            await pipeline.execute()
 
-    def _write_jobs(self, jobs: list[dict]) -> None:
-        tmp_file = self._jobs_file.with_suffix('.tmp')
-        payload = json.dumps(jobs, ensure_ascii=True, indent=2)
-        tmp_file.write_text(payload, encoding='utf-8')
-        tmp_file.replace(self._jobs_file)
+    async def get_job(self, job_id: str) -> JobRecord | None:
+        raw = await self._redis.get(_job_key(job_id))
+        if raw is None:
+            return None
+        return JobRecord.model_validate_json(raw)
 
-    def list_jobs(self) -> list[JobRecord]:
-        with self._lock:
-            jobs = [JobRecord.model_validate(item) for item in self._read_jobs()]
-        return sorted(jobs, key=lambda item: item.created_at, reverse=True)
+    async def list_jobs(self, limit: int = 100) -> list[JobRecord]:
+        ids = await self._redis.lrange(JOBS_INDEX_KEY, 0, max(limit - 1, 0))
+        result: list[JobRecord] = []
+        for job_id in ids:
+            job = await self.get_job(job_id)
+            if job is not None:
+                result.append(job)
+        return result
 
-    def get_job(self, job_id: str) -> JobRecord | None:
-        with self._lock:
-            for item in self._read_jobs():
-                if item.get('id') == job_id:
-                    return JobRecord.model_validate(item)
-        return None
+    async def update_job(self, job_id: str, **fields: object) -> JobRecord:
+        current = await self.get_job(job_id)
+        if current is None:
+            raise KeyError(f'Job not found: {job_id}')
 
-    def add_job(self, job: JobRecord) -> None:
-        with self._lock:
-            jobs = self._read_jobs()
-            jobs.append(job.model_dump(mode='json'))
-            self._write_jobs(jobs)
+        updated_payload = current.model_dump(mode='json')
+        updated_payload.update(fields)
+        updated_payload['updated_at'] = _now_utc().isoformat()
+        updated = JobRecord.model_validate(updated_payload)
+        await self._redis.set(_job_key(job_id), updated.model_dump_json())
+        return updated
 
-    def update_job(self, job_id: str, **fields: object) -> JobRecord:
-        with self._lock:
-            jobs = self._read_jobs()
-            for index, item in enumerate(jobs):
-                if item.get('id') != job_id:
-                    continue
-                item.update(fields)
-                item['updated_at'] = _now_utc().isoformat()
-                jobs[index] = item
-                self._write_jobs(jobs)
-                return JobRecord.model_validate(item)
-        raise KeyError(f'Job not found: {job_id}')
+
+def _job_key(job_id: str) -> str:
+    return f'{JOB_KEY_PREFIX}{job_id}'
 
 
 def _now_utc() -> datetime:

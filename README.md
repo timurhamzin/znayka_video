@@ -4,6 +4,8 @@
 
 Service integration plan and checklist:
 - [`docs/integration-plan.md`](docs/integration-plan.md)
+- Separate queue-based service scaffold:
+  - [`integration_service/README.md`](integration_service/README.md)
 
 ## Prerequisites
 

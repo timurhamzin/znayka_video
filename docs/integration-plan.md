@@ -13,12 +13,11 @@ without rewriting core transcription logic.
 
 - In scope:
   - Separate FastAPI integration service in this repository.
-  - Job API with file-backed state for MVP.
+  - Job API with Redis-backed queue and state for MVP.
   - Background execution that calls existing pipeline scripts.
   - Documentation and operational checklist.
 - Out of scope (for now):
   - Authentication/authorization.
-  - Distributed queue/broker.
   - Production-grade persistence (PostgreSQL) in this repository.
 
 ## Phased Checklist
@@ -39,14 +38,17 @@ Acceptance criteria:
 - [x] Add service-level `.env.example`.
 - [x] Add service-level `pyproject.toml`.
 - [x] Implement FastAPI app with health endpoint.
+- [x] Add basic HTML control form with pipeline step tickboxes.
 - [x] Implement job API:
   - [x] `POST /jobs/transcribe`
   - [x] `GET /jobs/{job_id}`
   - [x] `GET /jobs`
-- [x] Implement file-based job storage (`integration_service/data/jobs.json`).
-- [x] Implement background runner that executes existing root pipeline.
+- [x] Implement Redis-based queue and job state store.
+- [x] Implement ARQ worker as separate process.
+- [x] Implement async runner that executes existing root pipeline.
 - [x] Return structured status transitions (`queued`, `running`, `completed`,
   `failed`).
+- [x] Add `docker-compose` for app + worker + redis.
 
 Acceptance criteria:
 - [x] Can create a job and observe status transitions end-to-end.
@@ -77,8 +79,8 @@ Acceptance criteria:
 
 ### Phase 4: Production Readiness
 
-- [ ] Replace JSON job store with PostgreSQL.
-- [ ] Add queue worker (RQ/Celery/Dramatiq) for concurrent jobs.
+- [ ] Replace Redis-only job history with PostgreSQL-backed persistence.
+- [x] Add queue worker (ARQ) for concurrent jobs.
 - [ ] Add retries and timeout policies.
 - [ ] Add observability:
   - [ ] structured logs
@@ -117,8 +119,9 @@ Acceptance criteria:
 
 - Risk: subprocess integration can drift from script CLI behavior.
   - Mitigation: keep a single command path and add integration tests.
-- Risk: JSON job store corruption on abrupt termination.
-  - Mitigation: atomic write strategy and migration to PostgreSQL in Phase 4.
+- Risk: Redis state can be lost without persistence config.
+  - Mitigation: enable Redis persistence for non-dev and move to PostgreSQL in
+    Phase 4.
 - Risk: long-running jobs block process resources.
   - Mitigation: move to dedicated queue worker in Phase 4.
 
@@ -128,5 +131,8 @@ Acceptance criteria:
   - Plan created.
   - Phase 1 implementation started.
   - Separate `integration_service/` scaffold created.
-  - Job API and file-backed job store implemented.
+  - Job API and Redis-backed job store implemented.
+  - ARQ async worker implemented as separate process.
+  - HTML form with tickboxes added for job submission.
+  - Docker Compose stack added (`app`, `worker`, `redis`).
   - `dry_run` execution mode added for safe lifecycle verification.

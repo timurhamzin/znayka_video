@@ -41,3 +41,5 @@
 - Follow and update the checklist in `docs/integration-plan.md`.
 - Keep integration implementation in `integration_service/` as a separate project
   until monorepo migration.
+- Use `integration_service/main.py` (app) and `integration_service/worker_main.py`
+  (worker) for local/PyCharm runs.

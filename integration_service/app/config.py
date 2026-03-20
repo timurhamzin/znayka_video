@@ -4,15 +4,20 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from arq.connections import RedisSettings
 from dotenv import load_dotenv
 
 
 @dataclass(frozen=True)
 class Settings:
     repo_root: Path
-    jobs_file: Path
     pipeline_entrypoint: Path
-    root_env_file: Path
+    redis_host: str
+    redis_port: int
+    redis_database: int
+    redis_password: str | None
+    app_host: str
+    app_port: int
 
 
 def load_settings() -> Settings:
@@ -21,31 +26,37 @@ def load_settings() -> Settings:
 
     load_dotenv(service_root / '.env', override=False)
 
-    jobs_file_env = os.getenv(
-        'INTEGRATION_JOBS_FILE',
-        str(service_root / 'data' / 'jobs.json'),
-    )
     pipeline_entrypoint_env = os.getenv(
         'INTEGRATION_PIPELINE_ENTRYPOINT',
         'main.py',
     )
-    root_env_file_env = os.getenv('INTEGRATION_ROOT_ENV_FILE', '.env')
-
-    jobs_file = Path(jobs_file_env)
-    if not jobs_file.is_absolute():
-        jobs_file = repo_root / jobs_file
+    redis_host = os.getenv('INTEGRATION_REDIS_HOST', '127.0.0.1')
+    redis_port = int(os.getenv('INTEGRATION_REDIS_PORT', '6379'))
+    redis_database = int(os.getenv('INTEGRATION_REDIS_DB', '0'))
+    redis_password = os.getenv('INTEGRATION_REDIS_PASSWORD') or None
+    app_host = os.getenv('INTEGRATION_APP_HOST', '127.0.0.1')
+    app_port = int(os.getenv('INTEGRATION_APP_PORT', '8010'))
 
     pipeline_entrypoint = Path(pipeline_entrypoint_env)
     if not pipeline_entrypoint.is_absolute():
         pipeline_entrypoint = repo_root / pipeline_entrypoint
 
-    root_env_file = Path(root_env_file_env)
-    if not root_env_file.is_absolute():
-        root_env_file = repo_root / root_env_file
-
     return Settings(
         repo_root=repo_root,
-        jobs_file=jobs_file,
         pipeline_entrypoint=pipeline_entrypoint,
-        root_env_file=root_env_file,
+        redis_host=redis_host,
+        redis_port=redis_port,
+        redis_database=redis_database,
+        redis_password=redis_password,
+        app_host=app_host,
+        app_port=app_port,
+    )
+
+
+def to_redis_settings(settings: Settings) -> RedisSettings:
+    return RedisSettings(
+        host=settings.redis_host,
+        port=settings.redis_port,
+        database=settings.redis_database,
+        password=settings.redis_password,
     )
