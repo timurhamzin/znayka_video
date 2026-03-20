@@ -11,7 +11,7 @@ services:
       dockerfile: integration_service/Dockerfile
     container_name: znayka-integration-app
     working_dir: /workspace
-    command: uv run --project integration_service python integration_service/main.py
+    command: uv run --project integration_service uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload
     env_file:
       - .env.example
     environment:

@@ -135,4 +135,6 @@ Acceptance criteria:
   - ARQ async worker implemented as separate process.
   - HTML form with tickboxes added for job submission.
   - Docker Compose stack added (`app`, `worker`, `redis`).
+  - Local runtime folders moved under ignored `local_testing/`.
+  - Root `.dockerignore` aligned with `.gitignore`.
   - `dry_run` execution mode added for safe lifecycle verification.

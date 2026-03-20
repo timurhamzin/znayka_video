@@ -1,0 +1,38 @@
+# Git and IDE
+.git
+.gitignore
+.gitattributes
+.idea
+.vscode
+
+# Python cache and envs
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+ENV/
+
+# Local env files
+.env
+.env.local
+
+# Local test/runtime artifacts
+local_testing/
+downloads/
+processed/
+temp/
+tmp/
+tmp_debug/
+*.log
+*.stdout
+*.stderr
+
+# Node and build artifacts
+node_modules/
+build/
+dist/
+*.egg-info/
+
+# Local-only integration helper launchers
+integration_service/scripts/local/

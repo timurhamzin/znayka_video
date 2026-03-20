@@ -7,6 +7,13 @@ Service integration plan and checklist:
 - Separate queue-based service scaffold:
   - [`integration_service/README.md`](integration_service/README.md)
 
+## Local Testing Data
+
+Local runtime data is grouped under the ignored `local_testing/` directory:
+- `local_testing/downloads/`
+- `local_testing/processed/`
+- `local_testing/temp/`
+
 ## Prerequisites
 
 1. Install Python dependencies:
@@ -40,13 +47,14 @@ Copy `.env.example` to `.env` and edit the `TRANSCRIBE_*` variables.
 Required core variables:
 
 ```env
-TRANSCRIBE_VIDEO_FOLDER=path/to/folder/with/mp4
+TRANSCRIBE_VIDEO_FOLDER=./local_testing/downloads
 TRANSCRIBE_WHISPER_LANGUAGE=fr
 TRANSCRIBE_TRANSLATION_SOURCE_LANGUAGE=fr
 TRANSCRIBE_TRANSLATION_TARGET_LANGUAGE=en
 TRANSCRIBE_SIDECAR_SRT_ENCODING=utf-8
 TRANSCRIBE_HF_TOKEN=
 TRANSCRIBE_OFFLINE_MODE=false
+TRANSCRIBE_OUTPUT_FOLDER=./local_testing/processed
 ```
 
 Master step flags (`main.py`):

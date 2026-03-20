@@ -29,3 +29,6 @@ venv/
 # Python cache
 __pycache__/
 *.py[cod]
+
+# Local test data
+local_testing/

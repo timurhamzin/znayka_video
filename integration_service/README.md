@@ -35,11 +35,11 @@ docker run --name znayka-redis -p 6379:6379 -d redis:7-alpine
 ```
 
 4. Run app from PyCharm:
-- Run script: `integration_service/main.py`
+- Run script: `integration_service/scripts/local/run_app.py`
 - Working directory: repo root
 
 5. Run worker as a second process:
-- Run script: `integration_service/worker_main.py`
+- Run script: `integration_service/scripts/local/run_worker.py`
 - Working directory: repo root
 
 6. Open UI:

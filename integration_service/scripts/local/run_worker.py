@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def run() -> None:
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[3]
     command = [
         'uv',
         'run',
