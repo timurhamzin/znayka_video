@@ -49,6 +49,15 @@ FEATURE_ORDER = [
     ('TRANSCRIBE_RUN_SIDECAR_REPLACE', 'Replace sidecar from variant'),
     ('TRANSCRIBE_RUN_BAKE_SUBTITLES', 'Bake subtitles into video'),
 ]
+TRANSLATING_LINES_RE = re.compile(
+    r'Translating\s+(\d+)\s+subtitle text line\(s\)\s+from\s+(.+?)\s+in\s+(\d+)\s+batch\(es\)'
+)
+TRANSLATION_BATCH_RE = re.compile(
+    r'Translation batch\s+(\d+)/(\d+)\s+\((\d+)/(\d+)\s+lines,\s+elapsed\s+([0-9.]+)s,\s+eta\s+([0-9.]+s)\)'
+)
+MODEL_LOADING_RE = re.compile(r'Loading translation model:\s+(.+?)\s+\(offline=(True|False)\)')
+MODEL_LOADED_RE = re.compile(r'Translation model loaded in\s+([0-9.]+)s')
+TRANSLATION_FINISHED_RE = re.compile(r'Subtitle translation finished in\s+([0-9.]+)s')
 FEATURE_DETAILS = {
     'TRANSCRIBE_RUN_GENERATE_SPANS': (
         'Create/update speech span JSON files only.',
@@ -352,6 +361,8 @@ def _run_transcribe_step(
     current_video = 0
     total_videos = 0
     current_video_name = 'waiting for first video...'
+    stage_label = 'starting...'
+    translation_total_batches = 0
 
     with Progress(
         SpinnerColumn(),
@@ -380,6 +391,23 @@ def _run_transcribe_step(
         if process.stdout is None:
             raise RuntimeError('Failed to capture step output.')
 
+        def _feature_stats(videos_left: int | None = None) -> str:
+            if videos_left is None:
+                return f'stage: {stage_label}'
+            return f'stage: {stage_label} | videos left: {videos_left}'
+
+        def _video_stats(
+            elapsed_override: float | None = None,
+            eta_text: str | None = None,
+            videos_left: int | None = None,
+        ) -> str:
+            elapsed = time.perf_counter() - start_time if elapsed_override is None else elapsed_override
+            parts = [f'elapsed: {elapsed/60:.1f}m', f'eta: {eta_text or "n/a"}']
+            if videos_left is not None:
+                parts.append(f'videos left: {videos_left}')
+            parts.append(f'stage: {stage_label}')
+            return ' | '.join(parts)
+
         for raw_line in process.stdout:
             line = raw_line.rstrip('\n')
             match = VIDEO_HEADER_RE.search(line)
@@ -406,15 +434,81 @@ def _run_transcribe_step(
                     feature_task,
                     total=total_videos,
                     completed=completed_videos,
-                    stats=f'videos left: {videos_left}',
+                    stats=_feature_stats(videos_left),
                 )
                 progress.update(
                     video_task,
                     description=f'Video {current_video}/{total_videos}: {current_video_name}',
                     total=total_videos,
                     completed=completed_videos,
-                    stats=stats_text,
+                    stats=_video_stats(elapsed_override=elapsed, eta_text=eta_text, videos_left=videos_left),
                 )
+                continue
+
+            match = MODEL_LOADING_RE.search(line)
+            if match:
+                stage_label = f'loading model: {match.group(1)}'
+                progress.update(feature_task, stats=_feature_stats(total_videos - max(current_video - 1, 0) if total_videos else None))
+                progress.update(video_task, stats=_video_stats(videos_left=(total_videos - max(current_video - 1, 0)) if total_videos else None))
+                continue
+
+            match = MODEL_LOADED_RE.search(line)
+            if match:
+                stage_label = f'model loaded in {match.group(1)}s'
+                progress.update(feature_task, stats=_feature_stats(total_videos - max(current_video - 1, 0) if total_videos else None))
+                progress.update(video_task, stats=_video_stats(videos_left=(total_videos - max(current_video - 1, 0)) if total_videos else None))
+                continue
+
+            match = TRANSLATING_LINES_RE.search(line)
+            if match:
+                total_lines = int(match.group(1))
+                translation_total_batches = int(match.group(3))
+                stage_label = f'translating {total_lines} subtitle lines'
+                progress.update(
+                    video_task,
+                    total=max(translation_total_batches, 1),
+                    completed=0,
+                    stats=_video_stats(videos_left=(total_videos - max(current_video - 1, 0)) if total_videos else None),
+                )
+                progress.update(feature_task, stats=_feature_stats((total_videos - max(current_video - 1, 0)) if total_videos else None))
+                continue
+
+            match = TRANSLATION_BATCH_RE.search(line)
+            if match:
+                batch_index = int(match.group(1))
+                total_batches = int(match.group(2))
+                processed_lines = int(match.group(3))
+                total_lines = int(match.group(4))
+                elapsed_seconds = float(match.group(5))
+                eta_text = match.group(6)
+                stage_label = f'translating {processed_lines}/{total_lines} lines'
+                progress.update(
+                    video_task,
+                    total=max(total_batches, 1),
+                    completed=batch_index,
+                    stats=_video_stats(
+                        elapsed_override=elapsed_seconds,
+                        eta_text=eta_text,
+                        videos_left=(total_videos - max(current_video - 1, 0)) if total_videos else None,
+                    ),
+                )
+                progress.update(feature_task, stats=_feature_stats((total_videos - max(current_video - 1, 0)) if total_videos else None))
+                continue
+
+            match = TRANSLATION_FINISHED_RE.search(line)
+            if match:
+                stage_label = f'translation finished in {match.group(1)}s'
+                progress.update(
+                    video_task,
+                    total=max(translation_total_batches, 1),
+                    completed=max(translation_total_batches, 1),
+                    stats=_video_stats(
+                        elapsed_override=float(match.group(1)),
+                        eta_text='0.0s',
+                        videos_left=(total_videos - max(current_video - 1, 0)) if total_videos else None,
+                    ),
+                )
+                progress.update(feature_task, stats=_feature_stats((total_videos - max(current_video - 1, 0)) if total_videos else None))
                 continue
 
             if any(token in line for token in ('ERROR', 'Traceback', 'Failed')):

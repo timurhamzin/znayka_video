@@ -561,6 +561,7 @@ class SRTTranslator:
             output_path: Path,
             append: bool = True,
     ) -> None:
+        started_at = time.perf_counter()
         lines = input_path.read_text(encoding="utf-8").splitlines()
 
         text_lines = []
@@ -580,6 +581,12 @@ class SRTTranslator:
             text_lines.append(stripped)
             indices.append(i)
 
+        logger.info(
+            "  Translating %d subtitle text line(s) from %s in %d batch(es)",
+            len(text_lines),
+            input_path.name,
+            max(1, (len(text_lines) + self.batch_size - 1) // self.batch_size),
+        )
         translations = self._translate_batches(text_lines)
 
         mapping = dict(zip(indices, translations))
@@ -606,13 +613,35 @@ class SRTTranslator:
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         output_path.write_text("\n".join(out), encoding="utf-8")
+        logger.info(
+            "  Subtitle translation finished in %.2fs",
+            time.perf_counter() - started_at,
+        )
 
     def _translate_batches(self, lines: list[str]) -> list[str]:
         results = []
+        total_lines = len(lines)
+        total_batches = max(1, (total_lines + self.batch_size - 1) // self.batch_size)
+        started_at = time.perf_counter()
 
         for i in range(0, len(lines), self.batch_size):
             batch = lines[i: i + self.batch_size]
+            batch_index = i // self.batch_size + 1
             results.extend(self.translator.translate(batch))
+            processed_lines = min(i + len(batch), total_lines)
+            elapsed = time.perf_counter() - started_at
+            eta = None
+            if batch_index > 0 and batch_index < total_batches:
+                eta = (elapsed / batch_index) * (total_batches - batch_index)
+            logger.info(
+                "  Translation batch %d/%d (%d/%d lines, elapsed %.2fs, eta %s)",
+                batch_index,
+                total_batches,
+                processed_lines,
+                total_lines,
+                elapsed,
+                f"{eta:.2f}s" if eta is not None else "0.00s",
+            )
 
         return results
 
@@ -897,6 +926,7 @@ class VideoPipeline:
         self.output_folder = output_folder
 
     def run(self) -> None:
+        started_at = time.perf_counter()
         if not self.video_folder.exists():
             logger.error("Video folder does not exist: %s", self.video_folder)
             return
@@ -921,6 +951,7 @@ class VideoPipeline:
         logger.info("Found %d video(s) to process", len(videos))
 
         for idx, video in enumerate(videos, 1):
+            video_started_at = time.perf_counter()
             logger.info("")
             logger.info("=" * 60)
             logger.info("Video %d/%d: %s", idx, len(videos), video.name)
@@ -928,9 +959,16 @@ class VideoPipeline:
 
             try:
                 self._process_video(video)
+                logger.info(
+                    "Finished %s in %.2fs",
+                    video.name,
+                    time.perf_counter() - video_started_at,
+                )
             except Exception as error:
                 logger.exception("Failed to process %s: %s", video.name, error)
                 continue
+
+        logger.info("Pipeline run finished in %.2fs", time.perf_counter() - started_at)
 
     def _process_video(self, video: Path) -> None:
         name = video.stem
@@ -1685,10 +1723,20 @@ def main() -> None:
     )
     if should_load_translation_model:
         try:
+            model_started_at = time.perf_counter()
+            logger.info(
+                "Loading translation model: %s (offline=%s)",
+                translation_model_name,
+                offline_mode,
+            )
             model = TranslationModel(
                 translation_model_name,
                 hf_token=hf_token,
                 local_files_only=offline_mode,
+            )
+            logger.info(
+                "Translation model loaded in %.2fs",
+                time.perf_counter() - model_started_at,
             )
         except ImportError as error:
             raise RuntimeError(
