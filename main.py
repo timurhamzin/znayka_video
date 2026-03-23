@@ -40,6 +40,7 @@ except ImportError:
     HAS_RICH = False
 
 FEATURE_ORDER = [
+    ('TRANSCRIBE_RUN_CUT_EXPLICIT_CONTENT', 'Cut explicit content'),
     ('TRANSCRIBE_RUN_GENERATE_SPANS', 'Generate speech spans'),
     ('TRANSCRIBE_RUN_FILTER_SIDECARS', 'Filter sidecar by spans'),
     ('TRANSCRIBE_RUN_TRANSCRIPTION', 'Run Whisper transcription'),
@@ -58,6 +59,10 @@ MODEL_LOADING_RE = re.compile(r'Loading translation model:\s+(.+?)\s+\(offline=(
 MODEL_LOADED_RE = re.compile(r'Translation model loaded in\s+([0-9.]+)s')
 TRANSLATION_FINISHED_RE = re.compile(r'Subtitle translation finished in\s+([0-9.]+)s')
 FEATURE_DETAILS = {
+    'TRANSCRIBE_RUN_CUT_EXPLICIT_CONTENT': (
+        'Cut subtitle-marked explicit scenes and retime the sidecar.',
+        '~2-15+ min/video',
+    ),
     'TRANSCRIBE_RUN_GENERATE_SPANS': (
         'Create/update speech span JSON files only.',
         '~0.05-0.5 min/video',
@@ -633,6 +638,20 @@ def _run_merge_step(
         raise RuntimeError('Merge step reported errors.')
 
 
+def _run_explicit_cut_step(
+    env_overrides: dict[str, str],
+    step_index: int,
+    total_steps: int,
+) -> None:
+    env = os.environ.copy()
+    env.update(env_overrides)
+    env['PYTHONUNBUFFERED'] = '1'
+    logger.info('==> Step %d/%d: cut explicit content', step_index, total_steps)
+    process = subprocess.run([sys.executable, 'explicit_content_cut.py'], env=env, check=False)
+    if process.returncode != 0:
+        raise RuntimeError('Step failed: cut explicit content')
+
+
 def _run_sidecar_replace_step(
     video_folder: Path,
     sidecar_encoding: str,
@@ -733,6 +752,10 @@ def main() -> int:
     )
 
     env_flags = {
+        'TRANSCRIBE_RUN_CUT_EXPLICIT_CONTENT': _to_bool(
+            _first_env('TRANSCRIBE_RUN_CUT_EXPLICIT_CONTENT', default='false'),
+            False,
+        ),
         'TRANSCRIBE_RUN_GENERATE_SPANS': _to_bool(
             _first_env('TRANSCRIBE_RUN_GENERATE_SPANS', default='false'),
             False,
@@ -768,6 +791,7 @@ def main() -> int:
         logger.info('Selection canceled by user. Exiting without running steps.')
         return 0
 
+    run_cut_explicit_content = resolved_flags['TRANSCRIBE_RUN_CUT_EXPLICIT_CONTENT']
     run_generate_spans = resolved_flags['TRANSCRIBE_RUN_GENERATE_SPANS']
     run_filter_sidecars = resolved_flags['TRANSCRIBE_RUN_FILTER_SIDECARS']
     run_transcription = resolved_flags['TRANSCRIBE_RUN_TRANSCRIPTION']
@@ -855,7 +879,29 @@ def main() -> int:
             else:
                 run_bake_subtitles = False
 
+    if run_cut_explicit_content:
+        missing_sidecars_for_cut = [
+            video for video in videos if not video.with_suffix('.srt').exists()
+        ]
+        if missing_sidecars_for_cut:
+            if not _resolve_yes_no_decision(
+                'missing_sidecars_for_explicit_cut',
+                'Some sidecar SRT files are missing. Continue explicit-content cut anyway?',
+            ):
+                run_cut_explicit_content = False
+
     steps: list[tuple[str, str, dict[str, str] | None]] = []
+
+    if run_cut_explicit_content:
+        steps.append(
+            (
+                'cut explicit content',
+                'explicit_cut',
+                {
+                    **common_env,
+                },
+            )
+        )
 
     if run_generate_spans:
         steps.append(
@@ -945,9 +991,10 @@ def main() -> int:
     )
 
     logger.info(
-        'Final step flags after preflight: generate_spans=%s, filter_sidecars=%s, '
+        'Final step flags after preflight: cut_explicit_content=%s, generate_spans=%s, filter_sidecars=%s, '
         'transcription=%s, translation=%s, bake_subtitles=%s, '
         'sidecar_replace=%s, merge=%s',
+        run_cut_explicit_content,
         run_generate_spans,
         run_filter_sidecars,
         run_transcription,
@@ -959,6 +1006,7 @@ def main() -> int:
 
     if not any(
         [
+            run_cut_explicit_content,
             run_generate_spans,
             run_filter_sidecars,
             run_transcription,
@@ -1021,6 +1069,14 @@ def main() -> int:
                 raise RuntimeError(f'Missing env for step: {step_name}')
             _run_transcribe_step(
                 name=step_name,
+                env_overrides=step_env,
+                step_index=idx,
+                total_steps=total_steps,
+            )
+        elif step_kind == 'explicit_cut':
+            if step_env is None:
+                raise RuntimeError(f'Missing env for step: {step_name}')
+            _run_explicit_cut_step(
                 env_overrides=step_env,
                 step_index=idx,
                 total_steps=total_steps,

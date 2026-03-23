@@ -61,6 +61,7 @@ Master step flags (`main.py`):
 
 ```env
 TRANSCRIBE_INTERACTIVE=true
+TRANSCRIBE_RUN_CUT_EXPLICIT_CONTENT=false
 TRANSCRIBE_RUN_GENERATE_SPANS=false
 TRANSCRIBE_RUN_FILTER_SIDECARS=false
 TRANSCRIBE_RUN_TRANSCRIPTION=false
@@ -73,6 +74,7 @@ TRANSCRIBE_RUN_MERGE=false
 Force flags:
 
 ```env
+TRANSCRIBE_FORCE_CUT_EXPLICIT_CONTENT=false
 TRANSCRIBE_FORCE_SPANS=true
 TRANSCRIBE_FORCE_TRANSCRIPTION=false
 TRANSCRIBE_FORCE_TRANSLATION=true
@@ -85,14 +87,25 @@ Notes:
   - `q` to exit without running
   - per-feature and per-video progress bars with elapsed time, ETA, and videos left
 - Translation is independent from transcription.
+- `TRANSCRIBE_RUN_CUT_EXPLICIT_CONTENT=true` removes subtitle-marked explicit scenes in place for the current `TRANSCRIBE_VIDEO_FOLDER`. Use a copied/testing folder when enabling it.
 - `TRANSCRIBE_RUN_TRANSLATION=true` runs translation from sidecar (`video_name.srt`) via `TRANSCRIBE_TRANSLATION_INPUT=sidecar`.
 - `TRANSCRIBE_RUN_BAKE_SUBTITLES=true` burns target subtitles into video (hardcoded in frame).
 - Sidecar replacement variant is derived from `TRANSCRIBE_SIDECAR_SRT_ENCODING`:
   - `utf-8` -> `translated_utf8`
   - `windows-1251`/`cp1251` -> `translated_windows1251`
 - Merge always uses video folder as source and merges translated files for the target encoding variant.
-- If a prerequisite is missing, `main.py` asks interactively and remembers your answer in `.master_pipeline_memory.json`.
+- Interactive runs ask before risky actions by default. Services/non-interactive callers can set `TRANSCRIBE_POLICY_<CHECK>=yes|no|ask`.
 - For single-video testing, set `TRANSCRIBE_SINGLE_VIDEO=Exact Video Name.mp4` (or stem).
+- Explicit-cut tuning:
+  - `TRANSCRIBE_EXPLICIT_CONTENT_KEYWORDS` (comma-separated overrides)
+  - `TRANSCRIBE_EXPLICIT_CUT_MARGIN_BEFORE_SEC`
+  - `TRANSCRIBE_EXPLICIT_CUT_MARGIN_AFTER_SEC`
+  - `TRANSCRIBE_EXPLICIT_CUT_GROUP_GAP_SEC`
+  - `TRANSCRIBE_EXPLICIT_CUT_SCENE_GAP_SEC`
+  - `TRANSCRIBE_EXPLICIT_CUT_MAX_EXTEND_BEFORE_SEC`
+  - `TRANSCRIBE_EXPLICIT_CUT_MAX_EXTEND_AFTER_SEC`
+  - `TRANSCRIBE_EXPLICIT_CUT_VIDEO_PRESET`
+  - `TRANSCRIBE_EXPLICIT_CUT_VIDEO_CRF`
 
 ## Run
 
@@ -120,6 +133,8 @@ Per video:
 
 - `Video Name.mp4`
 - `Video Name.srt` (sidecar)
+- `Video Name.explicit_cut_report.json`
+- `Video Name.explicit_cut_backup/`
 - `Video Name.speech_spans.json`
 - `Video Name/original/Video Name.srt`
 - `Video Name/translated_utf8/Video Name.srt`
@@ -132,6 +147,7 @@ Merge output:
 ## Scripts
 
 - `main.py` is the single orchestrator for spans, filtering, transcription, translation, merge, and optional sidecar replacement.
+- `explicit_content_cut.py` removes configured explicit scenes and rewrites sidecar timings.
 - `transcribe.py` provides the underlying transcription/translation/speech-span pipeline.
 - `sidecar_replace.py` is used by `main.py` for the sidecar replacement step.
 - `subtitles_to_markdown.py` is used by `main.py` for merge output generation.
