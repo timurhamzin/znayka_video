@@ -11,6 +11,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -35,6 +36,112 @@ class SRTBlock:
 class TimeSpan:
     start: float
     end: float
+
+
+@dataclass(frozen=True)
+class ExplicitCutConfig:
+    sidecar_encoding: str
+    keywords: list[str]
+    margin_before_sec: float
+    margin_after_sec: float
+    group_gap_sec: float
+    scene_gap_sec: float
+    max_extend_before_sec: float
+    max_extend_after_sec: float
+    preset: str
+    crf: str
+    frame_verification_backend: str = "off"
+    frame_interval_sec: float = 2.0
+    frame_nsfw_threshold: float = 0.7
+    frame_min_positive_ratio: float = 0.2
+    frame_max_samples_per_span: int = 12
+    force: bool = False
+
+
+@dataclass(frozen=True)
+class ExplicitCutPlan:
+    video_file: str
+    sidecar_file: str
+    sidecar_encoding_used: str
+    keywords: list[str]
+    matched_block_indexes: list[int]
+    cut_spans: list[TimeSpan]
+    original_duration_sec: float
+    cut_duration_sec: float
+    result_duration_sec: float
+    frame_verification_backend: str = "off"
+    frame_verification_passed: bool | None = None
+    frame_verification_summary: str | None = None
+    frame_verification_samples: list[dict[str, object]] | None = None
+    applied: bool = False
+    backup_dir: str | None = None
+    removed_stale_outputs: list[str] | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "video_file": self.video_file,
+            "sidecar_file": self.sidecar_file,
+            "sidecar_encoding_used": self.sidecar_encoding_used,
+            "keywords": self.keywords,
+            "matched_block_indexes": self.matched_block_indexes,
+            "cut_spans": [
+                {
+                    "start": round(span.start, 3),
+                    "end": round(span.end, 3),
+                    "duration_sec": round(span.end - span.start, 3),
+                }
+                for span in self.cut_spans
+            ],
+            "original_duration_sec": round(self.original_duration_sec, 3),
+            "cut_duration_sec": round(self.cut_duration_sec, 3),
+            "result_duration_sec": round(self.result_duration_sec, 3),
+            "frame_verification_backend": self.frame_verification_backend,
+            "frame_verification_passed": self.frame_verification_passed,
+            "frame_verification_summary": self.frame_verification_summary,
+            "frame_verification_samples": self.frame_verification_samples or [],
+            "backup_dir": self.backup_dir,
+            "removed_stale_outputs": self.removed_stale_outputs or [],
+            "applied": self.applied,
+        }
+
+    @classmethod
+    def from_dict(cls, payload: dict[str, object]) -> "ExplicitCutPlan":
+        raw_spans = payload.get("cut_spans", [])
+        cut_spans = [
+            TimeSpan(start=float(item["start"]), end=float(item["end"]))
+            for item in raw_spans
+            if isinstance(item, dict)
+        ]
+        return cls(
+            video_file=str(payload.get("video_file", "")),
+            sidecar_file=str(payload.get("sidecar_file", "")),
+            sidecar_encoding_used=str(payload.get("sidecar_encoding_used", "utf-8")),
+            keywords=[str(item) for item in payload.get("keywords", [])],
+            matched_block_indexes=[int(item) for item in payload.get("matched_block_indexes", [])],
+            cut_spans=cut_spans,
+            original_duration_sec=float(payload.get("original_duration_sec", 0.0)),
+            cut_duration_sec=float(payload.get("cut_duration_sec", 0.0)),
+            result_duration_sec=float(payload.get("result_duration_sec", 0.0)),
+            frame_verification_backend=str(payload.get("frame_verification_backend", "off")),
+            frame_verification_passed=(
+                bool(payload["frame_verification_passed"])
+                if payload.get("frame_verification_passed") is not None
+                else None
+            ),
+            frame_verification_summary=(
+                str(payload["frame_verification_summary"])
+                if payload.get("frame_verification_summary")
+                else None
+            ),
+            frame_verification_samples=[
+                item
+                for item in payload.get("frame_verification_samples", [])
+                if isinstance(item, dict)
+            ],
+            applied=bool(payload.get("applied", False)),
+            backup_dir=str(payload["backup_dir"]) if payload.get("backup_dir") else None,
+            removed_stale_outputs=[str(item) for item in payload.get("removed_stale_outputs", [])],
+        )
 
 
 def _first_env(*names: str, default: str | None = None) -> str | None:
@@ -198,6 +305,56 @@ def _explicit_keywords() -> list[str]:
     if raw:
         return [_safe_name(item) for item in raw.split(",") if item.strip()]
     return _default_keywords()
+
+
+def load_explicit_cut_config_from_env() -> ExplicitCutConfig:
+    sidecar_encoding = _first_env(
+        "TRANSCRIBE_SIDECAR_SRT_ENCODING",
+        "TRANSCRIBE_DUPLICATE_SRT_ENCODING",
+        "DUPLICATE_SRT_ENCODING",
+        default="utf-8",
+    ) or "utf-8"
+    return ExplicitCutConfig(
+        sidecar_encoding=sidecar_encoding,
+        keywords=_explicit_keywords(),
+        margin_before_sec=float(
+            _first_env("TRANSCRIBE_EXPLICIT_CUT_MARGIN_BEFORE_SEC", default="0.5")
+        ),
+        margin_after_sec=float(
+            _first_env("TRANSCRIBE_EXPLICIT_CUT_MARGIN_AFTER_SEC", default="0.5")
+        ),
+        group_gap_sec=float(
+            _first_env("TRANSCRIBE_EXPLICIT_CUT_GROUP_GAP_SEC", default="20")
+        ),
+        scene_gap_sec=float(
+            _first_env("TRANSCRIBE_EXPLICIT_CUT_SCENE_GAP_SEC", default="5")
+        ),
+        max_extend_before_sec=float(
+            _first_env("TRANSCRIBE_EXPLICIT_CUT_MAX_EXTEND_BEFORE_SEC", default="5")
+        ),
+        max_extend_after_sec=float(
+            _first_env("TRANSCRIBE_EXPLICIT_CUT_MAX_EXTEND_AFTER_SEC", default="45")
+        ),
+        preset=_first_env("TRANSCRIBE_EXPLICIT_CUT_VIDEO_PRESET", default="veryfast")
+        or "veryfast",
+        crf=_first_env("TRANSCRIBE_EXPLICIT_CUT_VIDEO_CRF", default="20") or "20",
+        frame_verification_backend=(
+            _first_env("TRANSCRIBE_EXPLICIT_CUT_FRAME_BACKEND", default="off") or "off"
+        ).strip().lower(),
+        frame_interval_sec=float(
+            _first_env("TRANSCRIBE_EXPLICIT_CUT_FRAME_INTERVAL_SEC", default="2.0")
+        ),
+        frame_nsfw_threshold=float(
+            _first_env("TRANSCRIBE_EXPLICIT_CUT_FRAME_NSFW_THRESHOLD", default="0.7")
+        ),
+        frame_min_positive_ratio=float(
+            _first_env("TRANSCRIBE_EXPLICIT_CUT_FRAME_MIN_POSITIVE_RATIO", default="0.2")
+        ),
+        frame_max_samples_per_span=int(
+            _first_env("TRANSCRIBE_EXPLICIT_CUT_FRAME_MAX_SAMPLES_PER_SPAN", default="12")
+        ),
+        force=_parse_bool(_first_env("TRANSCRIBE_FORCE_CUT_EXPLICIT_CONTENT", default="false")),
+    )
 
 
 def _detect_explicit_spans(
@@ -385,62 +542,305 @@ def _backup_inputs(video: Path, sidecar: Path) -> Path:
     return backup_dir
 
 
-def _process_video(
+def _report_path_for(video: Path) -> Path:
+    return video.parent / f"{video.stem}.explicit_cut_report.json"
+
+
+def explicit_cut_report_path(video: Path) -> Path:
+    return _report_path_for(video)
+
+
+def _write_report(report_path: Path, report: ExplicitCutPlan | dict[str, object]) -> None:
+    payload = report.to_dict() if isinstance(report, ExplicitCutPlan) else report
+    report_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+
+
+def write_explicit_cut_plan_report(video: Path, plan: ExplicitCutPlan) -> Path:
+    report_path = _report_path_for(video)
+    _write_report(report_path, plan)
+    return report_path
+
+
+def _extract_frame(video: Path, timestamp_sec: float, output_path: Path) -> None:
+    process = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-ss",
+            f"{max(0.0, timestamp_sec):.3f}",
+            "-i",
+            str(video),
+            "-frames:v",
+            "1",
+            str(output_path),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    if process.returncode != 0:
+        raise RuntimeError(f"ffmpeg frame extraction failed for {video.name}: {process.stdout}")
+
+
+def _sample_frame_timestamps(span: TimeSpan, interval_sec: float, max_samples: int) -> list[float]:
+    duration = max(0.0, span.end - span.start)
+    if duration <= 0.0:
+        return []
+
+    interval = max(0.25, interval_sec)
+    timestamps: list[float] = []
+    cursor = span.start + min(interval / 2.0, duration / 2.0)
+    while cursor < span.end and len(timestamps) < max_samples:
+        timestamps.append(cursor)
+        cursor += interval
+    if not timestamps:
+        timestamps.append(span.start + duration / 2.0)
+    return timestamps[:max_samples]
+
+
+def _score_frames_with_opennsfw2(frame_paths: list[Path]) -> list[float]:
+    try:
+        import opennsfw2  # type: ignore
+    except ImportError as error:
+        raise RuntimeError(
+            "OpenNSFW2 backend requested but opennsfw2 is not installed."
+        ) from error
+
+    scores = opennsfw2.predict_images([str(path) for path in frame_paths])
+    return [float(score) for score in scores]
+
+
+def _score_frames_with_nudenet(frame_paths: list[Path]) -> list[float]:
+    try:
+        from nudenet import NudeDetector  # type: ignore
+    except ImportError as error:
+        raise RuntimeError(
+            "NudeNet backend requested but nudenet is not installed."
+        ) from error
+
+    detector = NudeDetector()
+    scores: list[float] = []
+    positive_labels = {
+        "EXPOSED_BREAST_F",
+        "EXPOSED_GENITALIA_F",
+        "EXPOSED_GENITALIA_M",
+        "EXPOSED_BUTTOCKS",
+        "COVERED_BREAST_F",
+    }
+    for frame_path in frame_paths:
+        detections = detector.detect(str(frame_path))
+        if not detections:
+            scores.append(0.0)
+            continue
+        positive_scores = [
+            float(item.get("score", 0.0))
+            for item in detections
+            if str(item.get("class", "")).upper() in positive_labels
+        ]
+        score = max(positive_scores, default=0.0)
+        scores.append(score)
+    return scores
+
+
+def _verify_plan_frames(
     video: Path,
-    sidecar_encoding: str,
-    keywords: list[str],
-    margin_before_sec: float,
-    margin_after_sec: float,
-    group_gap_sec: float,
-    scene_gap_sec: float,
-    max_extend_before_sec: float,
-    max_extend_after_sec: float,
-    preset: str,
-    crf: str,
-    force: bool,
-) -> None:
+    cut_spans: list[TimeSpan],
+    config: ExplicitCutConfig,
+) -> tuple[bool | None, str | None, list[dict[str, object]]]:
+    if not cut_spans:
+        return None, None, []
+    backend = config.frame_verification_backend.lower().strip()
+    if backend in {"", "off", "none", "disabled"}:
+        return None, None, []
+
+    frame_paths: list[Path] = []
+    timestamp_rows: list[tuple[Path, float, int]] = []
+    with tempfile.TemporaryDirectory(prefix="explicit_cut_verify_") as temp_dir_raw:
+        temp_dir = Path(temp_dir_raw)
+        for span_index, span in enumerate(cut_spans):
+            timestamps = _sample_frame_timestamps(
+                span,
+                interval_sec=config.frame_interval_sec,
+                max_samples=config.frame_max_samples_per_span,
+            )
+            for sample_index, timestamp in enumerate(timestamps):
+                frame_path = temp_dir / f"span{span_index:02d}_sample{sample_index:02d}.jpg"
+                _extract_frame(video, timestamp, frame_path)
+                frame_paths.append(frame_path)
+                timestamp_rows.append((frame_path, timestamp, span_index))
+
+        if not frame_paths:
+            return False, f"{backend}: no frames sampled", []
+
+        if backend == "opennsfw2":
+            scores = _score_frames_with_opennsfw2(frame_paths)
+        elif backend == "nudenet":
+            scores = _score_frames_with_nudenet(frame_paths)
+        else:
+            raise RuntimeError(
+                "Unsupported explicit-cut frame backend: "
+                f"{config.frame_verification_backend}"
+            )
+
+    samples: list[dict[str, object]] = []
+    positive_hits = 0
+    for score, (_, timestamp, span_index) in zip(scores, timestamp_rows):
+        is_positive = score >= config.frame_nsfw_threshold
+        if is_positive:
+            positive_hits += 1
+        samples.append(
+            {
+                "span_index": span_index,
+                "timestamp_sec": round(timestamp, 3),
+                "score": round(score, 4),
+                "above_threshold": is_positive,
+            }
+        )
+
+    sample_count = len(samples)
+    positive_ratio = positive_hits / sample_count if sample_count else 0.0
+    passed = positive_ratio >= config.frame_min_positive_ratio
+    summary = (
+        f"{backend}: {positive_hits}/{sample_count} sampled frame(s) "
+        f">= {config.frame_nsfw_threshold:.2f} "
+        f"({positive_ratio:.0%}, required {config.frame_min_positive_ratio:.0%})"
+    )
+    return passed, summary, samples
+
+
+def build_explicit_cut_plan(video: Path, config: ExplicitCutConfig) -> ExplicitCutPlan:
     sidecar = video.with_suffix(".srt")
     if not sidecar.exists():
-        logger.warning("Skipping %s: sidecar SRT not found", video.name)
-        return
+        raise FileNotFoundError(f"Sidecar SRT not found for {video.name}")
 
-    report_path = video.parent / f"{video.stem}.explicit_cut_report.json"
+    content, used_encoding = _read_text_with_fallbacks(sidecar, config.sidecar_encoding)
+    blocks = _parse_srt(content)
+    if not blocks:
+        raise ValueError(f"Sidecar SRT has no subtitle blocks for {video.name}")
+
+    duration_sec = _ffprobe_duration(video)
+    cut_spans, matched_indexes = _detect_explicit_spans(
+        blocks=blocks,
+        keywords=config.keywords,
+        margin_before_sec=config.margin_before_sec,
+        margin_after_sec=config.margin_after_sec,
+        group_gap_sec=config.group_gap_sec,
+        scene_gap_sec=config.scene_gap_sec,
+        max_extend_before_sec=config.max_extend_before_sec,
+        max_extend_after_sec=config.max_extend_after_sec,
+    )
+    merged_cut_spans = _merge_spans(cut_spans, gap_sec=0.05)
+    cut_duration_sec = sum(span.end - span.start for span in merged_cut_spans)
+    verification_passed, verification_summary, verification_samples = _verify_plan_frames(
+        video=video,
+        cut_spans=merged_cut_spans,
+        config=config,
+    )
+    return ExplicitCutPlan(
+        video_file=video.name,
+        sidecar_file=sidecar.name,
+        sidecar_encoding_used=used_encoding,
+        keywords=config.keywords,
+        matched_block_indexes=matched_indexes,
+        cut_spans=merged_cut_spans,
+        original_duration_sec=duration_sec,
+        cut_duration_sec=cut_duration_sec,
+        result_duration_sec=max(0.0, duration_sec - cut_duration_sec),
+        frame_verification_backend=config.frame_verification_backend,
+        frame_verification_passed=verification_passed,
+        frame_verification_summary=verification_summary,
+        frame_verification_samples=verification_samples,
+    )
+
+
+def apply_explicit_cut_plan(
+    video: Path,
+    plan: ExplicitCutPlan,
+    config: ExplicitCutConfig,
+) -> ExplicitCutPlan:
+    sidecar = video.with_suffix(".srt")
+    if not sidecar.exists():
+        raise FileNotFoundError(f"Sidecar SRT not found for {video.name}")
+    if not plan.cut_spans:
+        return ExplicitCutPlan(
+            **{
+                **plan.__dict__,
+                "applied": False,
+                "backup_dir": None,
+                "removed_stale_outputs": [],
+            }
+        )
+
+    content, used_encoding = _read_text_with_fallbacks(sidecar, plan.sidecar_encoding_used)
+    blocks = _parse_srt(content)
+    keep_spans = _keep_spans(plan.original_duration_sec, plan.cut_spans)
+    rewritten_blocks = _rewrite_srt(blocks, plan.cut_spans)
+    backup_path = _backup_inputs(video, sidecar)
+
+    with tempfile.TemporaryDirectory(prefix="explicit_cut_") as temp_dir_raw:
+        temp_dir = Path(temp_dir_raw)
+        temp_video = temp_dir / video.name
+        temp_sidecar = temp_dir / sidecar.name
+        _cut_video(video, temp_video, keep_spans, preset=config.preset, crf=config.crf)
+        temp_sidecar.write_text(_serialize_srt(rewritten_blocks), encoding=used_encoding)
+        shutil.move(str(temp_video), str(video))
+        shutil.move(str(temp_sidecar), str(sidecar))
+
+    removed_artifacts = _clear_stale_outputs(video)
+    return ExplicitCutPlan(
+        video_file=plan.video_file,
+        sidecar_file=plan.sidecar_file,
+        sidecar_encoding_used=used_encoding,
+        keywords=plan.keywords,
+        matched_block_indexes=plan.matched_block_indexes,
+        cut_spans=plan.cut_spans,
+        original_duration_sec=plan.original_duration_sec,
+        cut_duration_sec=plan.cut_duration_sec,
+        result_duration_sec=plan.result_duration_sec,
+        frame_verification_backend=plan.frame_verification_backend,
+        frame_verification_passed=plan.frame_verification_passed,
+        frame_verification_summary=plan.frame_verification_summary,
+        frame_verification_samples=plan.frame_verification_samples,
+        applied=True,
+        backup_dir=str(backup_path),
+        removed_stale_outputs=removed_artifacts,
+    )
+
+
+def _process_video(
+    video: Path,
+    config: ExplicitCutConfig,
+    analyze_only: bool,
+) -> None:
+    report_path = _report_path_for(video)
     backup_dir = video.parent / f"{video.stem}.explicit_cut_backup"
-    if report_path.exists() and backup_dir.exists() and not force:
+    if report_path.exists() and backup_dir.exists() and not config.force:
         logger.info("Skipping %s: explicit cut already applied (use force to re-run)", video.name)
         return
 
-    content, used_encoding = _read_text_with_fallbacks(sidecar, sidecar_encoding)
-    blocks = _parse_srt(content)
-    if not blocks:
+    try:
+        plan = build_explicit_cut_plan(video, config)
+    except FileNotFoundError:
+        logger.warning("Skipping %s: sidecar SRT not found", video.name)
+        return
+    except ValueError:
         logger.warning("Skipping %s: sidecar SRT has no subtitle blocks", video.name)
         return
 
-    cut_spans, matched_indexes = _detect_explicit_spans(
-        blocks=blocks,
-        keywords=keywords,
-        margin_before_sec=margin_before_sec,
-        margin_after_sec=margin_after_sec,
-        group_gap_sec=group_gap_sec,
-        scene_gap_sec=scene_gap_sec,
-        max_extend_before_sec=max_extend_before_sec,
-        max_extend_after_sec=max_extend_after_sec,
-    )
-    if not cut_spans:
+    _write_report(report_path, plan)
+    if not plan.cut_spans:
         logger.info("No explicit-content subtitle matches found for %s", video.name)
+        logger.info("  Report: %s", report_path)
         return
 
-    duration_sec = _ffprobe_duration(video)
-    keep_spans = _keep_spans(duration_sec, cut_spans)
-    rewritten_blocks = _rewrite_srt(blocks, cut_spans)
-
     logger.info(
-        "Cutting %s explicit span(s) from %s (matched subtitle cues: %s)",
-        len(cut_spans),
+        "Prepared %s explicit span(s) for %s (matched subtitle cues: %s)",
+        len(plan.cut_spans),
         video.name,
-        len(matched_indexes),
+        len(plan.matched_block_indexes),
     )
-    for index, span in enumerate(cut_spans, start=1):
+    for index, span in enumerate(plan.cut_spans, start=1):
         logger.info(
             "  Cut %d: %s -> %s (%.2fs)",
             index,
@@ -449,39 +849,18 @@ def _process_video(
             span.end - span.start,
         )
 
-    backup_path = _backup_inputs(video, sidecar)
-    with tempfile.TemporaryDirectory(prefix="explicit_cut_") as temp_dir_raw:
-        temp_dir = Path(temp_dir_raw)
-        temp_video = temp_dir / video.name
-        temp_sidecar = temp_dir / sidecar.name
-        _cut_video(video, temp_video, keep_spans, preset=preset, crf=crf)
-        temp_sidecar.write_text(_serialize_srt(rewritten_blocks), encoding=used_encoding)
-        shutil.move(str(temp_video), str(video))
-        shutil.move(str(temp_sidecar), str(sidecar))
+    if plan.frame_verification_summary:
+        logger.info("  Frame verification: %s", plan.frame_verification_summary)
 
-    removed_artifacts = _clear_stale_outputs(video)
-    report = {
-        "video_file": video.name,
-        "sidecar_file": sidecar.name,
-        "keywords": keywords,
-        "matched_block_indexes": matched_indexes,
-        "cut_spans": [
-            {
-                "start": round(span.start, 3),
-                "end": round(span.end, 3),
-                "duration_sec": round(span.end - span.start, 3),
-            }
-            for span in cut_spans
-        ],
-        "original_duration_sec": round(duration_sec, 3),
-        "cut_duration_sec": round(sum(span.end - span.start for span in cut_spans), 3),
-        "result_duration_sec": round(sum(span.end - span.start for span in keep_spans), 3),
-        "backup_dir": str(backup_path),
-        "removed_stale_outputs": removed_artifacts,
-    }
-    report_path.write_text(json.dumps(report, ensure_ascii=True, indent=2), encoding="utf-8")
+    logger.info("  Report: %s", report_path)
+    if analyze_only:
+        logger.info("  Analyze-only mode: waiting for approval before applying cuts.")
+        return
+
+    applied_plan = apply_explicit_cut_plan(video, plan, config)
+    _write_report(report_path, applied_plan)
     logger.info("Explicit-content cut complete for %s", video.name)
-    logger.info("  Backup: %s", backup_path)
+    logger.info("  Backup: %s", applied_plan.backup_dir)
     logger.info("  Report: %s", report_path)
 
 
@@ -499,26 +878,10 @@ def main() -> int:
     if not videos:
         raise RuntimeError("No target videos found.")
 
-    sidecar_encoding = _first_env(
-        "TRANSCRIBE_SIDECAR_SRT_ENCODING",
-        "TRANSCRIBE_DUPLICATE_SRT_ENCODING",
-        "DUPLICATE_SRT_ENCODING",
-        default="utf-8",
+    config = load_explicit_cut_config_from_env()
+    analyze_only = _parse_bool(
+        _first_env("TRANSCRIBE_EXPLICIT_CUT_ANALYZE_ONLY", default="false")
     )
-    margin_before_sec = float(_first_env("TRANSCRIBE_EXPLICIT_CUT_MARGIN_BEFORE_SEC", default="0.5"))
-    margin_after_sec = float(_first_env("TRANSCRIBE_EXPLICIT_CUT_MARGIN_AFTER_SEC", default="0.5"))
-    group_gap_sec = float(_first_env("TRANSCRIBE_EXPLICIT_CUT_GROUP_GAP_SEC", default="20"))
-    scene_gap_sec = float(_first_env("TRANSCRIBE_EXPLICIT_CUT_SCENE_GAP_SEC", default="5"))
-    max_extend_before_sec = float(
-        _first_env("TRANSCRIBE_EXPLICIT_CUT_MAX_EXTEND_BEFORE_SEC", default="5")
-    )
-    max_extend_after_sec = float(
-        _first_env("TRANSCRIBE_EXPLICIT_CUT_MAX_EXTEND_AFTER_SEC", default="45")
-    )
-    preset = _first_env("TRANSCRIBE_EXPLICIT_CUT_VIDEO_PRESET", default="veryfast") or "veryfast"
-    crf = _first_env("TRANSCRIBE_EXPLICIT_CUT_VIDEO_CRF", default="20") or "20"
-    force = _parse_bool(_first_env("TRANSCRIBE_FORCE_CUT_EXPLICIT_CONTENT", default="false"))
-    keywords = _explicit_keywords()
 
     logger.info("Found %d video(s) for explicit-content cut", len(videos))
     for index, video in enumerate(videos, start=1):
@@ -528,17 +891,8 @@ def main() -> int:
         logger.info("=" * 60)
         _process_video(
             video=video,
-            sidecar_encoding=sidecar_encoding or "utf-8",
-            keywords=keywords,
-            margin_before_sec=margin_before_sec,
-            margin_after_sec=margin_after_sec,
-            group_gap_sec=group_gap_sec,
-            scene_gap_sec=scene_gap_sec,
-            max_extend_before_sec=max_extend_before_sec,
-            max_extend_after_sec=max_extend_after_sec,
-            preset=preset,
-            crf=crf,
-            force=force,
+            config=config,
+            analyze_only=analyze_only,
         )
 
     return 0

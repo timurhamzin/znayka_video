@@ -12,6 +12,7 @@ from dotenv import load_dotenv
 class Settings:
     repo_root: Path
     pipeline_entrypoint: Path
+    explicit_cut_plan_db_path: Path
     redis_host: str
     redis_port: int
     redis_database: int
@@ -30,6 +31,10 @@ def load_settings() -> Settings:
         'INTEGRATION_PIPELINE_ENTRYPOINT',
         'main.py',
     )
+    explicit_cut_plan_db_env = os.getenv(
+        'INTEGRATION_EXPLICIT_CUT_PLAN_DB',
+        str(service_root / 'data' / 'explicit_cut_plans.sqlite3'),
+    )
     redis_host = os.getenv('INTEGRATION_REDIS_HOST', '127.0.0.1')
     redis_port = int(os.getenv('INTEGRATION_REDIS_PORT', '6379'))
     redis_database = int(os.getenv('INTEGRATION_REDIS_DB', '0'))
@@ -40,10 +45,14 @@ def load_settings() -> Settings:
     pipeline_entrypoint = Path(pipeline_entrypoint_env)
     if not pipeline_entrypoint.is_absolute():
         pipeline_entrypoint = repo_root / pipeline_entrypoint
+    explicit_cut_plan_db_path = Path(explicit_cut_plan_db_env)
+    if not explicit_cut_plan_db_path.is_absolute():
+        explicit_cut_plan_db_path = repo_root / explicit_cut_plan_db_path
 
     return Settings(
         repo_root=repo_root,
         pipeline_entrypoint=pipeline_entrypoint,
+        explicit_cut_plan_db_path=explicit_cut_plan_db_path,
         redis_host=redis_host,
         redis_port=redis_port,
         redis_database=redis_database,

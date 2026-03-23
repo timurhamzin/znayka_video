@@ -7,6 +7,7 @@ Architecture:
 - `app` (FastAPI): UI + API, enqueues jobs.
 - `worker` (ARQ): runs pipeline jobs in a separate process.
 - `redis`: queue and job state store.
+- `sqlite`: durable explicit-cut approval plan store for the service layer.
 
 ## Why ARQ
 
@@ -52,6 +53,11 @@ docker run --name znayka-redis -p 6379:6379 -d redis:7-alpine
 - `POST /jobs/transcribe`
 - `GET /jobs`
 - `GET /jobs/{job_id}`
+- `POST /explicit-cut/plans`
+- `GET /explicit-cut/plans`
+- `GET /explicit-cut/plans/{plan_id}`
+- `POST /explicit-cut/plans/{plan_id}/approve`
+- `POST /explicit-cut/plans/{plan_id}/apply`
 
 The form includes:
 - language fields
@@ -77,5 +83,10 @@ Services:
 - Worker executes the root pipeline entrypoint (`main.py`) via:
   - `uv run --project <repo_root> python main.py`
 - Existing root `.env` remains the baseline for pipeline behavior.
+- Explicit-cut plans are not stored in Redis. The service persists them in
+  `INTEGRATION_EXPLICIT_CUT_PLAN_DB` so approval state survives worker/app
+  restarts independently from the queue.
+- The explicit-cut API uses shared Python logic directly (`plan` then `apply`)
+  instead of report files as its source of truth.
 - This project stays separate for now and can be moved into monorepo backend
   later.

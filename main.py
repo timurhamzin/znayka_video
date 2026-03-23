@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -12,6 +13,11 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from explicit_content_cut import (
+    build_explicit_cut_plan,
+    load_explicit_cut_config_from_env,
+    write_explicit_cut_plan_report,
+)
 from sidecar_replace import replace_sidecars
 from subtitles_to_markdown import merge_subtitles
 
@@ -40,10 +46,10 @@ except ImportError:
     HAS_RICH = False
 
 FEATURE_ORDER = [
-    ('TRANSCRIBE_RUN_CUT_EXPLICIT_CONTENT', 'Cut explicit content'),
     ('TRANSCRIBE_RUN_GENERATE_SPANS', 'Generate speech spans'),
     ('TRANSCRIBE_RUN_FILTER_SIDECARS', 'Filter sidecar by spans'),
     ('TRANSCRIBE_RUN_TRANSCRIPTION', 'Run Whisper transcription'),
+    ('TRANSCRIBE_RUN_CUT_EXPLICIT_CONTENT', 'Cut explicit content'),
     ('TRANSCRIBE_RUN_TRANSLATION', 'Run translation from sidecar'),
     ('TRANSCRIBE_RUN_MERGE', 'Merge subtitles to Markdown'),
     ('TRANSCRIBE_RUN_SIDECAR_REPLACE', 'Replace sidecar from variant'),
@@ -60,7 +66,7 @@ MODEL_LOADED_RE = re.compile(r'Translation model loaded in\s+([0-9.]+)s')
 TRANSLATION_FINISHED_RE = re.compile(r'Subtitle translation finished in\s+([0-9.]+)s')
 FEATURE_DETAILS = {
     'TRANSCRIBE_RUN_CUT_EXPLICIT_CONTENT': (
-        'Cut subtitle-marked explicit scenes and retime the sidecar.',
+        'Generate a cut plan from subtitles, then apply only after approval.',
         '~2-15+ min/video',
     ),
     'TRANSCRIBE_RUN_GENERATE_SPANS': (
@@ -652,6 +658,66 @@ def _run_explicit_cut_step(
         raise RuntimeError('Step failed: cut explicit content')
 
 
+def _explicit_cut_report_path(video: Path) -> Path:
+    return video.parent / f'{video.stem}.explicit_cut_report.json'
+
+
+def _generate_explicit_cut_reports(
+    env_overrides: dict[str, str],
+    videos: list[Path],
+) -> list[dict[str, object]]:
+    reports: list[dict[str, object]] = []
+    config = load_explicit_cut_config_from_env()
+    for video in videos:
+        try:
+            plan = build_explicit_cut_plan(video, config)
+        except FileNotFoundError:
+            continue
+        write_explicit_cut_plan_report(video, plan)
+        reports.append(plan.to_dict())
+    return reports
+
+
+def _preflight_explicit_cut_plan(
+    run_cut_explicit_content: bool,
+    common_env: dict[str, str],
+    videos: list[Path],
+) -> bool:
+    if not run_cut_explicit_content:
+        return False
+
+    reports = _generate_explicit_cut_reports(common_env, videos)
+    planned_reports = [
+        report for report in reports if float(report.get('cut_duration_sec', 0.0)) > 0.0
+    ]
+    if not planned_reports:
+        logger.info('Explicit-cut preflight found no matching scenes to remove.')
+        return False
+
+    summary_items: list[str] = []
+    for report in planned_reports[:3]:
+        cut_spans = report.get('cut_spans', [])
+        first_span = cut_spans[0] if cut_spans else None
+        if isinstance(first_span, dict):
+            summary_items.append(
+                f"{report.get('video_file')} ({len(cut_spans)} cut(s), "
+                f"{report.get('cut_duration_sec')}s total, "
+                f"first: {first_span.get('start')}..{first_span.get('end')})"
+            )
+        else:
+            summary_items.append(
+                f"{report.get('video_file')} ({report.get('cut_duration_sec')}s total)"
+            )
+    if len(planned_reports) > 3:
+        summary_items.append(f'+{len(planned_reports) - 3} more')
+
+    question = (
+        'Explicit-cut preflight report is ready. Approve applying the planned cuts? '
+        + '; '.join(summary_items)
+    )
+    return _resolve_yes_no_decision('approve_explicit_cut_plan', question)
+
+
 def _run_sidecar_replace_step(
     video_folder: Path,
     sidecar_encoding: str,
@@ -883,25 +949,26 @@ def main() -> int:
         missing_sidecars_for_cut = [
             video for video in videos if not video.with_suffix('.srt').exists()
         ]
-        if missing_sidecars_for_cut:
+        if missing_sidecars_for_cut and run_transcription:
+            logger.warning(
+                'Explicit-cut preflight requires existing sidecar subtitles before the run. '
+                'Run transcription first, then run explicit cut in a follow-up pass.'
+            )
+            run_cut_explicit_content = False
+        elif missing_sidecars_for_cut:
             if not _resolve_yes_no_decision(
                 'missing_sidecars_for_explicit_cut',
                 'Some sidecar SRT files are missing. Continue explicit-content cut anyway?',
             ):
                 run_cut_explicit_content = False
+        else:
+            run_cut_explicit_content = _preflight_explicit_cut_plan(
+                run_cut_explicit_content=run_cut_explicit_content,
+                common_env=common_env,
+                videos=videos,
+            )
 
     steps: list[tuple[str, str, dict[str, str] | None]] = []
-
-    if run_cut_explicit_content:
-        steps.append(
-            (
-                'cut explicit content',
-                'explicit_cut',
-                {
-                    **common_env,
-                },
-            )
-        )
 
     if run_generate_spans:
         steps.append(
@@ -965,6 +1032,17 @@ def main() -> int:
                     'TRANSCRIBE_SPEECH_SPANS_OVERWRITE': 'true' if force_spans else 'false',
                     'TRANSCRIBE_TRANSLATION_ONLY_MODE': 'false',
                     'TRANSCRIBE_ENABLE_TRANSLATION': 'false',
+                },
+            )
+        )
+
+    if run_cut_explicit_content:
+        steps.append(
+            (
+                'cut explicit content',
+                'explicit_cut',
+                {
+                    **common_env,
                 },
             )
         )

@@ -9,8 +9,20 @@ from arq.connections import ArqRedis, create_pool
 from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from explicit_content_cut import ExplicitCutPlan
+
 from .config import load_settings, to_redis_settings
-from .models import JobCreatedResponse, JobRecord, TranscribeJobRequest
+from .explicit_cut_service import apply_plan, create_plan
+from .models import (
+    ExplicitCutPlanCreatedResponse,
+    ExplicitCutPlanDecisionRequest,
+    ExplicitCutPlanRecord,
+    ExplicitCutPlanRequest,
+    JobCreatedResponse,
+    JobRecord,
+    TranscribeJobRequest,
+)
+from .plan_store import SqliteExplicitCutPlanStore
 from .store import RedisJobStore
 
 logger = logging.getLogger(__name__)
@@ -23,6 +35,9 @@ app = FastAPI(title='Znayka Integration Service', version='0.2.0')
 @app.on_event('startup')
 async def startup_event() -> None:
     app.state.redis = await create_pool(to_redis_settings(settings))
+    plan_store = SqliteExplicitCutPlanStore(settings.explicit_cut_plan_db_path)
+    plan_store.initialize()
+    app.state.explicit_cut_plan_store = plan_store
 
 
 @app.on_event('shutdown')
@@ -101,9 +116,102 @@ async def get_job(job_id: str, request: Request) -> JobRecord:
     return job
 
 
+@app.post(
+    '/explicit-cut/plans',
+    response_model=ExplicitCutPlanCreatedResponse,
+    status_code=201,
+)
+async def create_explicit_cut_plan(
+    payload: ExplicitCutPlanRequest,
+    request: Request,
+) -> ExplicitCutPlanCreatedResponse:
+    store = _plan_store(request)
+    plan = create_plan(settings, payload)
+    now = _now_utc()
+    record = ExplicitCutPlanRecord(
+        id=uuid4().hex,
+        status='planned',
+        created_at=now,
+        updated_at=now,
+        request=payload,
+        plan=plan.to_dict(),
+        result_message='Explicit-cut plan created',
+    )
+    store.add_plan(record)
+    return ExplicitCutPlanCreatedResponse(id=record.id, status=record.status)
+
+
+@app.get('/explicit-cut/plans', response_model=list[ExplicitCutPlanRecord])
+async def list_explicit_cut_plans(request: Request) -> list[ExplicitCutPlanRecord]:
+    return _plan_store(request).list_plans(limit=100)
+
+
+@app.get('/explicit-cut/plans/{plan_id}', response_model=ExplicitCutPlanRecord)
+async def get_explicit_cut_plan(plan_id: str, request: Request) -> ExplicitCutPlanRecord:
+    record = _plan_store(request).get_plan(plan_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail='Explicit-cut plan not found')
+    return record
+
+
+@app.post('/explicit-cut/plans/{plan_id}/approve', response_model=ExplicitCutPlanRecord)
+async def approve_explicit_cut_plan(
+    plan_id: str,
+    payload: ExplicitCutPlanDecisionRequest,
+    request: Request,
+) -> ExplicitCutPlanRecord:
+    store = _plan_store(request)
+    current = store.get_plan(plan_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail='Explicit-cut plan not found')
+    next_status = 'approved' if payload.approved else 'rejected'
+    return store.update_plan(
+        plan_id,
+        status=next_status,
+        note=payload.note,
+        result_message=(
+            'Explicit-cut plan approved'
+            if payload.approved
+            else 'Explicit-cut plan rejected'
+        ),
+    )
+
+
+@app.post('/explicit-cut/plans/{plan_id}/apply', response_model=ExplicitCutPlanRecord)
+async def apply_explicit_cut_plan_endpoint(
+    plan_id: str,
+    request: Request,
+) -> ExplicitCutPlanRecord:
+    store = _plan_store(request)
+    current = store.get_plan(plan_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail='Explicit-cut plan not found')
+    if current.status != 'approved':
+        raise HTTPException(
+            status_code=409,
+            detail='Explicit-cut plan must be approved before apply.',
+        )
+
+    applied_plan = apply_plan(
+        settings=settings,
+        request=current.request,
+        plan=ExplicitCutPlan.from_dict(current.plan),
+    )
+    return store.update_plan(
+        plan_id,
+        status='applied',
+        plan=applied_plan.to_dict(),
+        result_message='Explicit-cut plan applied',
+    )
+
+
 def _store(request: Request) -> RedisJobStore:
     redis: ArqRedis = request.app.state.redis
     return RedisJobStore(redis)
+
+
+def _plan_store(request: Request) -> SqliteExplicitCutPlanStore:
+    return request.app.state.explicit_cut_plan_store
 
 
 async def _enqueue_job(request: Request, payload: TranscribeJobRequest) -> JobRecord:

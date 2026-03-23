@@ -59,6 +59,7 @@ Acceptance criteria:
 - [ ] Map job request fields to explicit `TRANSCRIBE_*` env variables.
 - [ ] Keep legacy env vars as compatibility fallback only.
 - [ ] Add API request/response schema documentation.
+- [x] Add explicit-cut approval-plan API and service-owned plan persistence.
 - [ ] Add idempotency strategy for duplicate submissions (MVP key or hash).
 - [ ] Add basic validation for video selection and folder existence.
 
@@ -80,6 +81,7 @@ Acceptance criteria:
 ### Phase 4: Production Readiness
 
 - [ ] Replace Redis-only job history with PostgreSQL-backed persistence.
+- [ ] Replace SQLite explicit-cut approval-plan store with PostgreSQL-backed persistence.
 - [x] Add queue worker (ARQ) for concurrent jobs.
 - [ ] Add retries and timeout policies.
 - [ ] Add observability:
@@ -138,3 +140,7 @@ Acceptance criteria:
   - Local runtime folders moved under ignored `local_testing/`.
   - Root `.dockerignore` aligned with `.gitignore`.
   - `dry_run` execution mode added for safe lifecycle verification.
+- 2026-03-23:
+  - Explicit-cut logic refactored toward shared `plan` + `apply` functions.
+  - Integration service gained SQLite-backed explicit-cut approval plan store.
+  - Explicit-cut API added for `create/get/list/approve/apply` plan lifecycle.

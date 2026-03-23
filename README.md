@@ -88,6 +88,8 @@ Notes:
   - per-feature and per-video progress bars with elapsed time, ETA, and videos left
 - Translation is independent from transcription.
 - `TRANSCRIBE_RUN_CUT_EXPLICIT_CONTENT=true` removes subtitle-marked explicit scenes in place for the current `TRANSCRIBE_VIDEO_FOLDER`. Use a copied/testing folder when enabling it.
+- Explicit-cut shared logic now exposes a pure `plan` + `apply` flow. JSON
+  report files are convenience artifacts for local runs, not the core contract.
 - `TRANSCRIBE_RUN_TRANSLATION=true` runs translation from sidecar (`video_name.srt`) via `TRANSCRIBE_TRANSLATION_INPUT=sidecar`.
 - `TRANSCRIBE_RUN_BAKE_SUBTITLES=true` burns target subtitles into video (hardcoded in frame).
 - Sidecar replacement variant is derived from `TRANSCRIBE_SIDECAR_SRT_ENCODING`:
@@ -106,6 +108,11 @@ Notes:
   - `TRANSCRIBE_EXPLICIT_CUT_MAX_EXTEND_AFTER_SEC`
   - `TRANSCRIBE_EXPLICIT_CUT_VIDEO_PRESET`
   - `TRANSCRIBE_EXPLICIT_CUT_VIDEO_CRF`
+  - `TRANSCRIBE_EXPLICIT_CUT_FRAME_BACKEND` (`off`, `opennsfw2`, `nudenet`)
+  - `TRANSCRIBE_EXPLICIT_CUT_FRAME_INTERVAL_SEC`
+  - `TRANSCRIBE_EXPLICIT_CUT_FRAME_NSFW_THRESHOLD`
+  - `TRANSCRIBE_EXPLICIT_CUT_FRAME_MIN_POSITIVE_RATIO`
+  - `TRANSCRIBE_EXPLICIT_CUT_FRAME_MAX_SAMPLES_PER_SPAN`
 
 ## Run
 
