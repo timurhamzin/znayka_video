@@ -67,6 +67,12 @@ class SRTBlock:
     lines: list[str]
 
 
+@dataclass
+class TranslationChunk:
+    block_indexes: list[int]
+    text: str
+
+
 def _parse_bool(value: str) -> bool:
     return value.lower() in {"1", "true", "yes", "on"}
 
@@ -185,6 +191,41 @@ def _read_text_with_fallbacks(path: Path, primary_encoding: str) -> tuple[str, s
         1,
         f"Failed to decode {path} using: {', '.join(tried)}",
     )
+
+
+def _language_script_group(language: str) -> str | None:
+    normalized = language.lower()
+    if normalized.startswith(("ru", "uk", "be", "bg", "sr")):
+        return "cyrillic"
+    if normalized.startswith("el"):
+        return "greek"
+    if normalized.startswith(("ar", "fa", "ur")):
+        return "arabic"
+    if normalized.startswith("he"):
+        return "hebrew"
+    return None
+
+
+def _contains_target_script(text: str, language: str) -> bool:
+    script_group = _language_script_group(language)
+    if script_group == "cyrillic":
+        return bool(re.search(r"[А-Яа-яЁёІіЇїЄєЎў]", text))
+    if script_group == "greek":
+        return bool(re.search(r"[Α-Ωα-ω]", text))
+    if script_group == "arabic":
+        return bool(re.search(r"[\u0600-\u06FF]", text))
+    if script_group == "hebrew":
+        return bool(re.search(r"[\u0590-\u05FF]", text))
+    return False
+
+
+def _looks_like_phonetic_respelling(text: str) -> bool:
+    ascii_letters = re.findall(r"[A-Za-z]", text)
+    if len(ascii_letters) < 6:
+        return False
+    hyphen_count = text.count("-")
+    spaced_hyphenated = re.findall(r"[A-Za-z]-[A-Za-z]", text)
+    return hyphen_count >= 2 and len(spaced_hyphenated) >= 2
 
 
 class SpeechSpanDetector:
@@ -544,16 +585,21 @@ class SRTTranslator:
     """Responsible for SRT parsing and translation."""
 
     TIMESTAMP = re.compile(r"\d\d:\d\d:\d\d,\d\d\d")
+    CHUNK_SEPARATOR = "\n<<<ZNAYKA_BLOCK_BREAK>>>\n"
 
     def __init__(
             self,
             translator: TranslationModel,
             respeller: EnglishRespeller | None = None,
             batch_size: int = 32,
+            chunk_block_limit: int = 12,
+            chunk_char_limit: int = 2200,
     ):
         self.translator = translator
         self.respeller = respeller
         self.batch_size = batch_size
+        self.chunk_block_limit = chunk_block_limit
+        self.chunk_char_limit = chunk_char_limit
 
     def translate_file(
             self,
@@ -562,88 +608,144 @@ class SRTTranslator:
             append: bool = True,
     ) -> None:
         started_at = time.perf_counter()
-        lines = input_path.read_text(encoding="utf-8").splitlines()
+        input_text = input_path.read_text(encoding="utf-8")
+        blocks = _parse_srt(input_text)
+        if not blocks:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(input_text, encoding="utf-8")
+            logger.info("  Subtitle translation finished in %.2fs", time.perf_counter() - started_at)
+            return
 
-        text_lines = []
-        indices = []
-
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-
-            if (
-                    stripped.isdigit()
-                    or "-->" in line
-                    or not stripped
-                    or self.TIMESTAMP.search(line)
-            ):
-                continue
-
-            text_lines.append(stripped)
-            indices.append(i)
-
-        logger.info(
-            "  Translating %d subtitle text line(s) from %s in %d batch(es)",
-            len(text_lines),
-            input_path.name,
-            max(1, (len(text_lines) + self.batch_size - 1) // self.batch_size),
-        )
-        translations = self._translate_batches(text_lines)
-
-        mapping = dict(zip(indices, translations))
-
-        out = []
-
-        for i, line in enumerate(lines):
-            if i not in mapping:
-                out.append(line)
-                continue
-
-            translated = mapping[i]
-
+        translations = self._translate_blocks(blocks, input_path.name)
+        rendered_blocks: list[SRTBlock] = []
+        for block, translated in zip(blocks, translations, strict=False):
+            translated_lines = [line for line in translated.splitlines() if line.strip()]
+            output_lines: list[str] = []
             if append:
-                out.append(line)
-
+                output_lines.extend(block.lines)
                 if self.respeller:
-                    out.append(self.respeller.respell(line))
-
-                out.append(translated)
-            else:
-                out.append(translated)
+                    output_lines.extend(self.respeller.respell(line) for line in block.lines)
+            output_lines.extend(translated_lines or [translated.strip()])
+            rendered_blocks.append(SRTBlock(start=block.start, end=block.end, lines=output_lines))
 
         output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        output_path.write_text("\n".join(out), encoding="utf-8")
+        output_path.write_text(_serialize_srt(rendered_blocks), encoding="utf-8")
         logger.info(
             "  Subtitle translation finished in %.2fs",
             time.perf_counter() - started_at,
         )
 
-    def _translate_batches(self, lines: list[str]) -> list[str]:
-        results = []
-        total_lines = len(lines)
-        total_batches = max(1, (total_lines + self.batch_size - 1) // self.batch_size)
-        started_at = time.perf_counter()
+    def _translate_blocks(self, blocks: list[SRTBlock], input_name: str) -> list[str]:
+        chunked_blocks = self._build_translation_chunks(blocks)
+        total_blocks = len(blocks)
+        logger.info(
+            "  Translating %d subtitle block(s) from %s in %d chunk(es)",
+            total_blocks,
+            input_name,
+            len(chunked_blocks),
+        )
+        translated_chunks = self._translate_batches(chunked_blocks, total_blocks)
+        translated_blocks = [""] * total_blocks
+        for chunk, translated_chunk in zip(chunked_blocks, translated_chunks, strict=False):
+            split = self._split_translated_chunk(translated_chunk, len(chunk.block_indexes))
+            if split is None:
+                logger.warning(
+                    "  Chunk split mismatch for %s; falling back to per-block translation for this chunk.",
+                    input_name,
+                )
+                split = self.translator.translate(
+                    [self._block_text(blocks[index]) for index in chunk.block_indexes]
+                )
+            for block_index, translated_text in zip(chunk.block_indexes, split, strict=False):
+                translated_blocks[block_index] = translated_text.strip()
+        return translated_blocks
 
-        for i in range(0, len(lines), self.batch_size):
-            batch = lines[i: i + self.batch_size]
+    def _translate_batches(
+            self,
+            chunks: list[TranslationChunk],
+            total_blocks: int,
+    ) -> list[str]:
+        results = []
+        total_chunks = len(chunks)
+        started_at = time.perf_counter()
+        processed_blocks = 0
+
+        for i in range(0, len(chunks), self.batch_size):
+            batch = chunks[i: i + self.batch_size]
             batch_index = i // self.batch_size + 1
-            results.extend(self.translator.translate(batch))
-            processed_lines = min(i + len(batch), total_lines)
+            results.extend(self.translator.translate([chunk.text for chunk in batch]))
+            processed_blocks += sum(len(chunk.block_indexes) for chunk in batch)
             elapsed = time.perf_counter() - started_at
             eta = None
+            total_batches = max(1, (total_chunks + self.batch_size - 1) // self.batch_size)
             if batch_index > 0 and batch_index < total_batches:
                 eta = (elapsed / batch_index) * (total_batches - batch_index)
             logger.info(
-                "  Translation batch %d/%d (%d/%d lines, elapsed %.2fs, eta %s)",
+                "  Translation batch %d/%d (%d/%d blocks, elapsed %.2fs, eta %s)",
                 batch_index,
                 total_batches,
-                processed_lines,
-                total_lines,
+                processed_blocks,
+                total_blocks,
                 elapsed,
                 f"{eta:.2f}s" if eta is not None else "0.00s",
             )
 
         return results
+
+    def _build_translation_chunks(self, blocks: list[SRTBlock]) -> list[TranslationChunk]:
+        chunks: list[TranslationChunk] = []
+        current_indexes: list[int] = []
+        current_texts: list[str] = []
+        current_chars = 0
+
+        for index, block in enumerate(blocks):
+            block_text = self._block_text(block)
+            separator_cost = len(self.CHUNK_SEPARATOR) if current_texts else 0
+            projected_chars = current_chars + separator_cost + len(block_text)
+            if (
+                    current_indexes
+                    and (
+                        len(current_indexes) >= self.chunk_block_limit
+                        or projected_chars > self.chunk_char_limit
+                    )
+            ):
+                chunks.append(
+                    TranslationChunk(
+                        block_indexes=current_indexes,
+                        text=self.CHUNK_SEPARATOR.join(current_texts),
+                    )
+                )
+                current_indexes = []
+                current_texts = []
+                current_chars = 0
+
+            current_indexes.append(index)
+            current_texts.append(block_text)
+            current_chars += len(block_text) + separator_cost
+
+        if current_indexes:
+            chunks.append(
+                TranslationChunk(
+                    block_indexes=current_indexes,
+                    text=self.CHUNK_SEPARATOR.join(current_texts),
+                )
+            )
+
+        return chunks
+
+    @staticmethod
+    def _block_text(block: SRTBlock) -> str:
+        return "\n".join(line.strip() for line in block.lines if line.strip())
+
+    def _split_translated_chunk(
+            self,
+            translated_chunk: str,
+            expected_parts: int,
+    ) -> list[str] | None:
+        parts = [part.strip() for part in translated_chunk.split(self.CHUNK_SEPARATOR)]
+        if len(parts) != expected_parts:
+            return None
+        return parts
 
 
 class WhisperTranscriber:
@@ -883,6 +985,8 @@ class VideoPipeline:
             speech_filter_rescue_bridge_max_cues: int = 6,
             speech_filter_rescue_bridge_max_duration_sec: float = 25.0,
             sidecar_srt_encoding: str = "utf-8",
+            translation_source_language: str = "en",
+            translation_target_language: str = "ru",
             output_folder: Path | None = None,
     ):
         self.video_folder = video_folder
@@ -923,6 +1027,8 @@ class VideoPipeline:
             speech_filter_rescue_bridge_max_duration_sec
         )
         self.sidecar_srt_encoding = sidecar_srt_encoding
+        self.translation_source_language = translation_source_language
+        self.translation_target_language = translation_target_language
         self.output_folder = output_folder
 
     def run(self) -> None:
@@ -1459,6 +1565,8 @@ class VideoPipeline:
         for block in blocks:
             deduped_lines: list[str] = []
             for line in block.lines:
+                if self._should_skip_sidecar_source_line(line):
+                    continue
                 if not deduped_lines or deduped_lines[-1] != line:
                     if deduped_lines:
                         prev = self._normalize_line_for_compare(deduped_lines[-1])
@@ -1468,12 +1576,20 @@ class VideoPipeline:
                             continue
                     deduped_lines.append(line)
 
-            deduped_blocks.append(
-                SRTBlock(start=block.start, end=block.end, lines=deduped_lines)
-            )
+            if deduped_lines:
+                deduped_blocks.append(
+                    SRTBlock(start=block.start, end=block.end, lines=deduped_lines)
+                )
 
         original_srt.write_text(_serialize_srt(deduped_blocks), encoding="utf-8")
         return original_srt
+
+    def _should_skip_sidecar_source_line(self, line: str) -> bool:
+        if _contains_target_script(line, self.translation_target_language):
+            return True
+        if self.translation_source_language.lower().startswith("en") and _looks_like_phonetic_respelling(line):
+            return True
+        return False
 
     @staticmethod
     def _normalize_line_for_compare(line: str) -> str:
@@ -1808,6 +1924,8 @@ def main() -> None:
         speech_filter_rescue_bridge_max_cues=speech_filter_rescue_bridge_max_cues,
         speech_filter_rescue_bridge_max_duration_sec=speech_filter_rescue_bridge_max_duration_sec,
         sidecar_srt_encoding=sidecar_srt_encoding,
+        translation_source_language=translation_source_language,
+        translation_target_language=translation_target_language,
         output_folder=output_folder,
     )
 
