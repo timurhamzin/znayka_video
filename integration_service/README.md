@@ -49,6 +49,7 @@ docker run --name znayka-redis -p 6379:6379 -d redis:7-alpine
 ## API and UI
 
 - `GET /` HTML form with tickboxes for pipeline steps.
+- `GET /` low-JS operator page for jobs and explicit-cut plan review.
 - `GET /health`
 - `POST /jobs/transcribe`
 - `GET /jobs`
@@ -58,6 +59,27 @@ docker run --name znayka-redis -p 6379:6379 -d redis:7-alpine
 - `GET /explicit-cut/plans/{plan_id}`
 - `POST /explicit-cut/plans/{plan_id}/approve`
 - `POST /explicit-cut/plans/{plan_id}/apply`
+
+Headless explicit-cut flow:
+1. `POST /explicit-cut/plans` to create a proposed cut plan.
+2. Review the returned plan and evidence.
+3. `POST /explicit-cut/plans/{plan_id}/approve` with `approved=true`.
+4. `POST /explicit-cut/plans/{plan_id}/apply` only after approval.
+
+Example:
+
+```bash
+curl -X POST http://127.0.0.1:8010/explicit-cut/plans \
+  -H "Content-Type: application/json" \
+  -d '{"video_name":"Toy.Soldiers.1991.720p.BluRay.x264-[YTS.AG].mp4"}'
+```
+
+Operator UI flow:
+1. Open `/`
+2. Create an explicit-cut plan with the simple HTML form
+3. Review the summary row
+4. Approve or reject
+5. Apply only after approval
 
 The form includes:
 - language fields
@@ -88,5 +110,11 @@ Services:
   restarts independently from the queue.
 - The explicit-cut API uses shared Python logic directly (`plan` then `apply`)
   instead of report files as its source of truth.
+- The explicit-cut core stays synchronous and reusable for CLI/library use.
+  The service calls that work asynchronously from the HTTP layer so long-running
+  planning/apply work does not block the event loop.
+- CPU-friendly default is still subtitle-first planning with
+  `frame_verification_backend=off`. If frame verification is enabled, keep it
+  scoped to candidate spans only.
 - This project stays separate for now and can be moved into monorepo backend
   later.

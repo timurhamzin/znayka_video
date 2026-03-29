@@ -92,6 +92,7 @@ Notes:
   report files are convenience artifacts for local runs, not the core contract.
 - `TRANSCRIBE_RUN_TRANSLATION=true` runs translation from sidecar (`video_name.srt`) via `TRANSCRIBE_TRANSLATION_INPUT=sidecar`.
 - `TRANSCRIBE_RUN_BAKE_SUBTITLES=true` burns target subtitles into video (hardcoded in frame).
+- `TRANSCRIBE_BAKE_SUBTITLE_SOURCE=target|sidecar` selects whether bake uses the translated variant or the root sidecar `.srt`.
 - Sidecar replacement variant is derived from `TRANSCRIBE_SIDECAR_SRT_ENCODING`:
   - `utf-8` -> `translated_utf8`
   - `windows-1251`/`cp1251` -> `translated_windows1251`

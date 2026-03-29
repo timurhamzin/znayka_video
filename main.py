@@ -764,6 +764,44 @@ def _preflight_sidecar_translation_source(
     return _resolve_yes_no_decision('mixed_language_sidecar_source', question)
 
 
+def _resolve_bake_subtitle_source(
+    videos: list[Path],
+    sidecar_encoding: str,
+    run_translation: bool,
+) -> tuple[bool, str]:
+    variant = _variant_for_encoding(sidecar_encoding)
+    missing_variant = [
+        video
+        for video in videos
+        if not (video.parent / video.stem / variant / f'{video.stem}.srt').exists()
+    ]
+    if not missing_variant or run_translation:
+        return run_translation, 'target'
+
+    if _resolve_yes_no_decision(
+        'missing_variant_for_bake',
+        f'Missing "{variant}" subtitles for bake step. Run translation first?',
+    ):
+        return True, 'target'
+
+    available_sidecars = [video for video in videos if video.with_suffix('.srt').exists()]
+    if not available_sidecars:
+        logger.info('Bake fallback is unavailable because no root sidecar SRT files were found.')
+        return False, 'target'
+
+    preview = ', '.join(video.name for video in available_sidecars[:3])
+    if len(available_sidecars) < len(videos):
+        preview += f'; {len(videos) - len(available_sidecars)} video(s) still missing sidecar SRT'
+    if _resolve_yes_no_decision(
+        'fallback_sidecar_for_bake',
+        f'Bake from existing sidecar SRT instead? {preview}',
+    ):
+        logger.info('Bake step will use existing root sidecar SRT files as the subtitle source.')
+        return False, 'sidecar'
+
+    return False, 'target'
+
+
 def _cancel_translation_dependent_steps(
     translation_requested: bool,
     run_translation: bool,
@@ -884,6 +922,7 @@ def main() -> int:
         _first_env('TRANSCRIBE_TRANSLATION_APPEND_SOURCE', default='true'),
         True,
     )
+    bake_subtitle_source = 'target'
 
     common_env = {
         'TRANSCRIBE_VIDEO_FOLDER': str(video_folder),
@@ -930,19 +969,19 @@ def main() -> int:
                 run_sidecar_replace = False
 
     if run_bake_subtitles:
-        variant = _variant_for_encoding(sidecar_encoding or 'utf-8')
-        missing_variant = [
-            video
-            for video in videos
-            if not (video.parent / video.stem / variant / f'{video.stem}.srt').exists()
-        ]
-        if missing_variant and not run_translation:
-            if _resolve_yes_no_decision(
-                'missing_variant_for_bake',
-                f'Missing "{variant}" subtitles for bake step. Run translation first?',
-            ):
-                run_translation = True
-            else:
+        run_translation, bake_subtitle_source = _resolve_bake_subtitle_source(
+            videos=videos,
+            sidecar_encoding=sidecar_encoding or 'utf-8',
+            run_translation=run_translation,
+        )
+        if bake_subtitle_source != 'sidecar':
+            variant = _variant_for_encoding(sidecar_encoding or 'utf-8')
+            missing_variant = [
+                video
+                for video in videos
+                if not (video.parent / video.stem / variant / f'{video.stem}.srt').exists()
+            ]
+            if missing_variant and not run_translation:
                 run_bake_subtitles = False
 
     if run_cut_explicit_content:
@@ -1133,6 +1172,7 @@ def main() -> int:
                     'TRANSCRIBE_ENABLE_TRANSLATION': 'false',
                     'TRANSCRIBE_ENABLE_BAKED_SUBTITLES': 'true',
                     'TRANSCRIBE_BAKE_SUBTITLES_ONLY_MODE': 'true',
+                    'TRANSCRIBE_BAKE_SUBTITLE_SOURCE': bake_subtitle_source,
                     'TRANSCRIBE_BAKE_SUBTITLES_OVERWRITE': 'true'
                     if force_bake_subtitles
                     else 'false',
