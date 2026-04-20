@@ -29,7 +29,7 @@ def _env_flag(name: str, default: bool = False) -> bool:
     return value.strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
-FIX_OPUS_AUDIO = _env_flag('DOWNLOAD_FIX_OPUS_AUDIO', default=False)
+FIX_INCOMPATIBLE_MEDIA = _env_flag('DOWNLOAD_FIX_OPUS_AUDIO', default=False)
 
 
 def _normalize_resolution(resolution: str) -> str:
@@ -72,14 +72,14 @@ def _collect_output_files(info: dict[str, Any] | None) -> set[Path]:
     return paths
 
 
-def _detect_audio_codec(file_path: Path) -> str | None:
+def _detect_stream_codec(file_path: Path, stream_selector: str) -> str | None:
     result = subprocess.run(
         [
             'ffprobe',
             '-v',
             'error',
             '-select_streams',
-            'a:0',
+            stream_selector,
             '-show_entries',
             'stream=codec_name',
             '-of',
@@ -96,8 +96,10 @@ def _detect_audio_codec(file_path: Path) -> str | None:
     return codec or None
 
 
-def _replace_opus_audio_with_aac(file_path: Path) -> bool:
-    temp_path = file_path.with_name(f'{file_path.stem}.aacfix{file_path.suffix}')
+def _convert_to_browser_compatible_mp4(file_path: Path) -> Path | None:
+    output_path = file_path.with_suffix('.mp4')
+    temp_path = output_path.with_name(f'{output_path.stem}.compatfix.mp4')
+
     result = subprocess.run(
         [
             'ffmpeg',
@@ -105,9 +107,17 @@ def _replace_opus_audio_with_aac(file_path: Path) -> bool:
             '-i',
             str(file_path),
             '-map',
-            '0',
+            '0:v:0',
+            '-map',
+            '0:a:0?',
             '-c:v',
-            'copy',
+            'libx264',
+            '-preset',
+            'medium',
+            '-crf',
+            '22',
+            '-pix_fmt',
+            'yuv420p',
             '-c:a',
             'aac',
             '-b:a',
@@ -123,33 +133,55 @@ def _replace_opus_audio_with_aac(file_path: Path) -> bool:
     if result.returncode != 0:
         if temp_path.exists():
             temp_path.unlink()
-        logger.error('Failed to convert audio to AAC for %s', file_path)
-        return False
+        logger.error(
+            'Failed to convert media to browser-compatible MP4 for %s',
+            file_path,
+        )
+        return None
 
-    temp_path.replace(file_path)
-    return True
+    if output_path.exists():
+        output_path.unlink()
+    temp_path.replace(output_path)
+
+    if output_path != file_path and file_path.exists():
+        file_path.unlink()
+
+    return output_path
 
 
-def _fix_opus_audio(files: set[Path]) -> None:
+def _fix_incompatible_media(files: set[Path]) -> None:
     if not files:
-        logger.info('No downloaded files were detected for Opus check.')
+        logger.info('No downloaded files were detected for media compatibility check.')
         return
 
     if not shutil.which('ffprobe') or not shutil.which('ffmpeg'):
         logger.warning(
             'DOWNLOAD_FIX_OPUS_AUDIO=true, but ffprobe/ffmpeg are not available. '
-            'Skipping Opus fix.'
+            'Skipping media compatibility fix.'
         )
         return
 
     for file_path in sorted(files):
         if not file_path.exists():
             continue
-        codec = _detect_audio_codec(file_path)
-        if codec != 'opus':
+
+        video_codec = _detect_stream_codec(file_path, 'v:0')
+        audio_codec = _detect_stream_codec(file_path, 'a:0')
+
+        needs_fix = audio_codec == 'opus' or video_codec != 'h264'
+        if not needs_fix:
             continue
-        logger.info('Detected Opus audio in %s. Re-encoding audio to AAC.', file_path)
-        _replace_opus_audio_with_aac(file_path)
+
+        logger.info(
+            'Detected potentially incompatible streams in %s (video=%s, audio=%s). '
+            'Converting to H.264/AAC MP4.',
+            file_path,
+            video_codec or 'unknown',
+            audio_codec or 'none',
+        )
+        output_path = _convert_to_browser_compatible_mp4(file_path)
+        if output_path is not None:
+            logger.info('Compatibility-fixed file: %s', output_path)
 
 
 def download_from_url(url: str, resolution: str) -> None:
@@ -190,10 +222,10 @@ def download_from_url(url: str, resolution: str) -> None:
         logger.error('Failed to download URL: %s', url)
         raise RuntimeError('Download failed. Check URL and access permissions.') from error
 
-    if FIX_OPUS_AUDIO:
+    if FIX_INCOMPATIBLE_MEDIA:
         files_to_check = _collect_output_files(info)
         files_to_check.update(downloaded_files)
-        _fix_opus_audio(files_to_check)
+        _fix_incompatible_media(files_to_check)
 
 
 if __name__ == '__main__':
