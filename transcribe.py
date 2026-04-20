@@ -130,6 +130,26 @@ def _parse_srt(content: str) -> list[SRTBlock]:
     return blocks
 
 
+def _format_duration_compact(seconds: float | None) -> str:
+    if seconds is None:
+        return "n/a"
+    total_seconds = max(0, int(round(seconds)))
+    hours, rem = divmod(total_seconds, 3600)
+    minutes, secs = divmod(rem, 60)
+    if hours:
+        return f"{hours:d}:{minutes:02}:{secs:02}"
+    return f"{minutes:d}:{secs:02}"
+
+
+def _safe_float(value: str | None) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
 def _serialize_srt(blocks: list[SRTBlock]) -> str:
     rendered: list[str] = []
 
@@ -1484,6 +1504,77 @@ class VideoPipeline:
             escaped = f"{escaped[0]}\\:{escaped[2:]}"
         return escaped
 
+    @staticmethod
+    def _probe_video_duration(video: Path) -> float | None:
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(video),
+        ]
+        process = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=False,
+        )
+        if process.returncode != 0:
+            logger.warning(
+                "  Failed to probe video duration for bake progress: %s",
+                process.stdout.strip(),
+            )
+            return None
+
+        return _safe_float(process.stdout.strip())
+
+    def _log_bake_progress(
+        self,
+        *,
+        progress_state: dict[str, str],
+        total_duration_sec: float | None,
+    ) -> None:
+        out_time_us = _safe_float(progress_state.get("out_time_us"))
+        out_time_ms = _safe_float(progress_state.get("out_time_ms"))
+        speed_text = progress_state.get("speed", "n/a").strip() or "n/a"
+        if out_time_us is not None:
+            elapsed_sec = out_time_us / 1_000_000.0
+        elif out_time_ms is not None:
+            elapsed_sec = out_time_ms / 1000.0
+        else:
+            elapsed_sec = 0.0
+
+        percent = 0.0
+        if total_duration_sec and total_duration_sec > 0:
+            percent = min(100.0, max(0.0, (elapsed_sec / total_duration_sec) * 100.0))
+
+        speed_value = None
+        if speed_text.endswith("x"):
+            speed_value = _safe_float(speed_text[:-1])
+
+        eta_sec = None
+        if (
+            total_duration_sec is not None
+            and total_duration_sec > 0
+            and speed_value is not None
+            and speed_value > 0
+        ):
+            remaining_media_sec = max(total_duration_sec - elapsed_sec, 0.0)
+            eta_sec = remaining_media_sec / speed_value
+
+        logger.info(
+            "  BAKE_PROGRESS percent=%.2f elapsed=%s total=%s speed=%s eta=%s",
+            percent,
+            _format_duration_compact(elapsed_sec),
+            _format_duration_compact(total_duration_sec),
+            speed_text,
+            _format_duration_compact(eta_sec),
+        )
+
     def _resolve_bake_subtitle_path(self, video: Path, output_dir: Path) -> tuple[Path | None, str]:
         if self.bake_subtitle_source == "sidecar":
             target_srt = video.with_suffix(".srt")
@@ -1512,10 +1603,14 @@ class VideoPipeline:
             self.sidecar_srt_encoding,
         )
         subtitles_filter = f"subtitles='{ffmpeg_sub_path}':charenc={ffmpeg_charenc}"
+        total_duration_sec = self._probe_video_duration(video)
 
         cmd = [
             "ffmpeg",
             "-y",
+            "-progress",
+            "pipe:1",
+            "-nostats",
             "-i",
             str(video),
             "-vf",
@@ -1530,19 +1625,59 @@ class VideoPipeline:
             "copy",
             str(baked_video),
         ]
-        process = subprocess.run(
+        process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            check=False,
+            bufsize=1,
         )
-        if process.returncode != 0:
+        if process.stdout is None:
+            raise RuntimeError("Failed to capture ffmpeg bake progress output.")
+
+        ffmpeg_output_lines: list[str] = []
+        progress_state: dict[str, str] = {}
+        last_logged_percent = -1.0
+        for raw_line in process.stdout:
+            line = raw_line.strip()
+            if not line:
+                continue
+            ffmpeg_output_lines.append(line)
+            if "=" not in line:
+                continue
+
+            key, value = line.split("=", maxsplit=1)
+            progress_state[key] = value
+            if key != "progress":
+                continue
+
+            out_time_us = _safe_float(progress_state.get("out_time_us"))
+            out_time_ms = _safe_float(progress_state.get("out_time_ms"))
+            elapsed_sec = 0.0
+            if out_time_us is not None:
+                elapsed_sec = out_time_us / 1_000_000.0
+            elif out_time_ms is not None:
+                elapsed_sec = out_time_ms / 1000.0
+
+            percent = 0.0
+            if total_duration_sec and total_duration_sec > 0:
+                percent = min(100.0, max(0.0, (elapsed_sec / total_duration_sec) * 100.0))
+
+            if value == "end" or percent - last_logged_percent >= 0.5:
+                self._log_bake_progress(
+                    progress_state=progress_state,
+                    total_duration_sec=total_duration_sec,
+                )
+                last_logged_percent = percent
+
+        process.stdout.close()
+        return_code = process.wait()
+        if return_code != 0:
             raise RuntimeError(
                 "Failed to bake subtitles with ffmpeg.\n"
                 f"Video: {video}\n"
                 f"Subtitle: {target_srt}\n"
-                f"ffmpeg output:\n{process.stdout}"
+                f"ffmpeg output:\n{chr(10).join(ffmpeg_output_lines)}"
             )
 
         logger.info("  Baked video created: %s", baked_video)

@@ -64,6 +64,9 @@ TRANSLATION_BATCH_RE = re.compile(
 MODEL_LOADING_RE = re.compile(r'Loading translation model:\s+(.+?)\s+\(offline=(True|False)\)')
 MODEL_LOADED_RE = re.compile(r'Translation model loaded in\s+([0-9.]+)s')
 TRANSLATION_FINISHED_RE = re.compile(r'Subtitle translation finished in\s+([0-9.]+)s')
+BAKE_PROGRESS_RE = re.compile(
+    r'BAKE_PROGRESS percent=([0-9.]+)\s+elapsed=([0-9:]+)\s+total=([0-9:]+|n/a)\s+speed=([^\s]+)\s+eta=([0-9:]+|n/a)'
+)
 FEATURE_DETAILS = {
     'TRANSCRIBE_RUN_CUT_EXPLICIT_CONTENT': (
         'Generate a cut plan from subtitles, then apply only after approval.',
@@ -592,6 +595,37 @@ def _run_transcribe_step(
                         ),
                     )
                     progress.update(feature_task, stats=_feature_stats((total_videos - max(current_video - 1, 0)) if total_videos else None))
+                    continue
+
+                match = BAKE_PROGRESS_RE.search(line)
+                if match:
+                    percent = float(match.group(1))
+                    elapsed_text = match.group(2)
+                    total_text = match.group(3)
+                    speed_text = match.group(4)
+                    eta_text = match.group(5)
+                    stage_label = f'baking subtitles ({speed_text})'
+                    completed_videos = max(current_video - 1, 0)
+                    feature_completed = completed_videos + (percent / 100.0)
+                    progress.update(
+                        video_task,
+                        total=100,
+                        completed=percent,
+                        stats=(
+                            f'elapsed: {elapsed_text} | eta: {eta_text} | '
+                            f'videos left: {(total_videos - max(current_video - 1, 0)) if total_videos else "n/a"} | '
+                            f'stage: {stage_label} | total: {total_text}'
+                        ),
+                    )
+                    if total_videos > 0:
+                        progress.update(
+                            feature_task,
+                            total=total_videos,
+                            completed=feature_completed,
+                            stats=_feature_stats(total_videos - max(current_video - 1, 0)),
+                        )
+                    else:
+                        progress.update(feature_task, stats=_feature_stats(None))
                     continue
 
                 if any(token in line for token in ('ERROR', 'Traceback', 'Failed')):
